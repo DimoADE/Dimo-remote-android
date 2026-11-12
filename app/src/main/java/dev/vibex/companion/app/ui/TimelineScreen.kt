@@ -36,6 +36,7 @@ import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.DropdownMenu
@@ -91,6 +92,7 @@ fun TimelinePane(
     state: UiState,
     model: CompanionModel,
     conversationId: String,
+    onOpenSidebar: () -> Unit = {},
     onBack: (() -> Unit)? = null,
 ) {
     val colors = VibexTheme.colors
@@ -229,14 +231,12 @@ fun TimelinePane(
                     .clip(CircleShape)
                     .background(colors.card)
                     .border(0.6.dp, colors.textPrimary.copy(alpha = 0.08f), CircleShape)
-                    .clickable {
-                        if (onBack != null) onBack() else model.openNewChatLanding()
-                    },
+                    .clickable(onClick = onBack ?: onOpenSidebar),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = "返回对话列表",
+                    imageVector = if (onBack != null) Icons.AutoMirrored.Rounded.ArrowBack else Icons.Rounded.Menu,
+                    contentDescription = if (onBack != null) "返回对话列表" else "打开侧边栏",
                     tint = colors.textPrimary,
                     modifier = Modifier.size(17.dp),
                 )

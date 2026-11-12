@@ -94,9 +94,10 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onScan: () -> Unit,
     onManualPair: () -> Unit = {},
+    onOpenSidebar: () -> Unit,
 ) {
     when (section) {
-        null -> SettingsIndex(state, model, onOpen)
+        null -> SettingsIndex(state, model, onOpen, onOpenSidebar)
         SettingsSection.Profile -> SettingsPage("个人资料", onBack) { ProfileSettings(state) }
         SettingsSection.Account -> SettingsPage("VibeX 账号", onBack) { AccountSettings(state, model, onOpen) }
         SettingsSection.Connection -> SettingsPage("已配对的电脑", onBack) { ConnectionSettings(state, model, onScan, onManualPair) }
@@ -112,6 +113,7 @@ private fun SettingsIndex(
     state: UiState,
     model: CompanionModel,
     onOpen: (SettingsSection) -> Unit,
+    onOpenSidebar: () -> Unit,
 ) {
     val colors = VibexTheme.colors
     val selected = state.profiles.find { it.hostId == state.selectedHostId } ?: state.profiles.firstOrNull()
@@ -124,14 +126,15 @@ private fun SettingsIndex(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
-            Text(
-                "设置",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = colors.textPrimary,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-            )
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                AppSidebarButton(onClick = onOpenSidebar, modifier = Modifier.align(Alignment.CenterStart))
+                Text(
+                    "设置",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary,
+                )
+            }
         }
 
         // 1. VibeX Account Card (Single top Personal Center)

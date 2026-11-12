@@ -7,15 +7,12 @@ import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.ui.Alignment
 
 /**
  * Page transitions shared by every navigation level, so a push, a pop and a tab switch
@@ -28,7 +25,6 @@ import androidx.compose.ui.Alignment
 internal object NavMotion {
     private const val SLIDE_MILLIS = 340
     private const val FADE_MILLIS = 160
-    private const val CHROME_MILLIS = 220
     private const val UNDERLAY_ALPHA = 0.6f
 
     private val Decelerate = CubicBezierEasing(0.32f, 0.72f, 0f, 1f)
@@ -75,9 +71,4 @@ internal object NavMotion {
         targetContentZIndex = zIndex,
         sizeTransform = null,
     )
-
-    val bottomBarEnter: EnterTransition =
-        expandVertically(tween(CHROME_MILLIS, easing = Decelerate), expandFrom = Alignment.Top)
-    val bottomBarExit: ExitTransition =
-        shrinkVertically(tween(CHROME_MILLIS, easing = Decelerate), shrinkTowards = Alignment.Top)
 }

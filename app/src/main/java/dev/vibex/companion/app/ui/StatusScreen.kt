@@ -126,7 +126,7 @@ private enum class KanbanViewMode(val id: String, val title: String, val icon: I
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StatusScreen(state: UiState, model: CompanionModel) {
+fun StatusScreen(state: UiState, model: CompanionModel, onOpenSidebar: () -> Unit) {
     val colors = VibexTheme.colors
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
@@ -265,7 +265,7 @@ fun StatusScreen(state: UiState, model: CompanionModel) {
 
     Column(Modifier.fillMaxSize().background(colors.bg)) {
         // Row 1 (Single Navigation Bar):
-        // - Columns mode: Project Selector Menu | 看板 | 计量统计 Icon + 新建会话 Icon
+        // - Columns mode: Sidebar Button + Project Selector Menu | 看板 | 计量统计 Icon + 新建会话 Icon
         // - Usage mode: ← 看板 | 计量统计 | ↻ 刷新
         Box(
             Modifier
@@ -273,60 +273,68 @@ fun StatusScreen(state: UiState, model: CompanionModel) {
                 .padding(horizontal = 16.dp, vertical = 10.dp),
         ) {
             if (viewMode == KanbanViewMode.Columns.id) {
-                Box(Modifier.align(Alignment.CenterStart)) {
-                    Row(
-                        Modifier
-                            .clip(CircleShape)
-                            .background(colors.bgElevated)
-                            .clickable { showProjectMenu = true }
-                            .padding(horizontal = 10.dp, vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Icon(
-                            imageVector = if (selectedProject == null) Icons.Rounded.Layers else Icons.Rounded.Folder,
-                            contentDescription = null,
-                            tint = colors.accent,
-                            modifier = Modifier.size(14.dp),
-                        )
-                        Text(
-                            selectedProject?.name ?: "全部项目",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = colors.textPrimary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.widthIn(max = 115.dp),
-                        )
-                        Icon(Icons.Rounded.ExpandMore, null, tint = colors.textSecondary, modifier = Modifier.size(14.dp))
-                    }
-                    DropdownMenu(expanded = showProjectMenu, onDismissRequest = { showProjectMenu = false }) {
-                        DropdownMenuItem(
-                            text = { Text("全部项目") },
-                            leadingIcon = { Icon(Icons.Rounded.Layers, null, modifier = Modifier.size(16.dp)) },
-                            trailingIcon = if (selectedProjectId == null) {
-                                { Icon(Icons.Rounded.Check, null, tint = colors.accent, modifier = Modifier.size(16.dp)) }
-                            } else null,
-                            onClick = {
-                                showProjectMenu = false
-                                selectedProjectId = null
-                            },
-                        )
-                        HorizontalDivider()
-                        projects.forEach { proj ->
-                            val isSelected = selectedProjectId?.equals(proj.id, ignoreCase = true) == true
+                // Half the bar minus half the centered title, so a long project name truncates instead of running under it.
+                Row(
+                    Modifier.align(Alignment.CenterStart).fillMaxWidth(0.5f).padding(end = 26.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    AppSidebarButton(onClick = onOpenSidebar)
+                    Box {
+                        Row(
+                            Modifier
+                                .clip(CircleShape)
+                                .background(colors.bgElevated)
+                                .clickable { showProjectMenu = true }
+                                .padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(
+                                imageVector = if (selectedProject == null) Icons.Rounded.Layers else Icons.Rounded.Folder,
+                                contentDescription = null,
+                                tint = colors.accent,
+                                modifier = Modifier.size(14.dp),
+                            )
+                            Text(
+                                selectedProject?.name ?: "全部项目",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = colors.textPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            Icon(Icons.Rounded.ExpandMore, null, tint = colors.textSecondary, modifier = Modifier.size(14.dp))
+                        }
+                        DropdownMenu(expanded = showProjectMenu, onDismissRequest = { showProjectMenu = false }) {
                             DropdownMenuItem(
-                                text = { Text(proj.name) },
-                                leadingIcon = { Icon(Icons.Rounded.Folder, null, modifier = Modifier.size(16.dp)) },
-                                trailingIcon = if (isSelected) {
+                                text = { Text("全部项目") },
+                                leadingIcon = { Icon(Icons.Rounded.Layers, null, modifier = Modifier.size(16.dp)) },
+                                trailingIcon = if (selectedProjectId == null) {
                                     { Icon(Icons.Rounded.Check, null, tint = colors.accent, modifier = Modifier.size(16.dp)) }
                                 } else null,
                                 onClick = {
                                     showProjectMenu = false
-                                    selectedProjectId = proj.id
-                                    model.selectProjectInPlace(proj.id)
+                                    selectedProjectId = null
                                 },
                             )
+                            HorizontalDivider()
+                            projects.forEach { proj ->
+                                val isSelected = selectedProjectId?.equals(proj.id, ignoreCase = true) == true
+                                DropdownMenuItem(
+                                    text = { Text(proj.name) },
+                                    leadingIcon = { Icon(Icons.Rounded.Folder, null, modifier = Modifier.size(16.dp)) },
+                                    trailingIcon = if (isSelected) {
+                                        { Icon(Icons.Rounded.Check, null, tint = colors.accent, modifier = Modifier.size(16.dp)) }
+                                    } else null,
+                                    onClick = {
+                                        showProjectMenu = false
+                                        selectedProjectId = proj.id
+                                        model.selectProjectInPlace(proj.id)
+                                    },
+                                )
+                            }
                         }
                     }
                 }

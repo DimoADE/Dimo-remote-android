@@ -1,26 +1,20 @@
 package dev.vibex.companion.app.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -28,7 +22,6 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -52,7 +45,6 @@ import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Groups
-import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.UnfoldMore
@@ -82,14 +74,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex
 import dev.vibex.companion.ConnectionState
 import dev.vibex.companion.ConversationSummary
 import dev.vibex.companion.SessionConfigChoice
@@ -119,31 +109,15 @@ private val starterSuggestions = listOf(
 fun ConversationList(
     state: UiState,
     model: CompanionModel,
-    onChromeHiddenChange: (Boolean) -> Unit = {},
+    onOpenSidebar: () -> Unit,
 ) {
     val colors = VibexTheme.colors
     val focusManager = LocalFocusManager.current
-    var isSidebarOpen by remember { mutableStateOf(false) }
-    var sidebarTab by remember { mutableStateOf("conversations") }
-    var sidebarSearch by remember { mutableStateOf("") }
     var draft by remember { mutableStateOf("") }
     var selectedAgentId by remember { mutableStateOf<String?>(null) }
     var composerMenu by remember { mutableStateOf<ComposerMenu?>(null) }
-    var isComposerFocused by remember { mutableStateOf(false) }
-    val shouldHideBottomChrome = isSidebarOpen || composerMenu != null || isComposerFocused
-    LaunchedEffect(shouldHideBottomChrome) {
-        onChromeHiddenChange(shouldHideBottomChrome)
-        if (isSidebarOpen) {
-            composerMenu = null
-            focusManager.clearFocus()
-        }
-    }
-    BackHandler(enabled = isSidebarOpen || composerMenu != null) {
-        if (isSidebarOpen) {
-            isSidebarOpen = false
-        } else {
-            composerMenu = null
-        }
+    BackHandler(enabled = composerMenu != null) {
+        composerMenu = null
     }
     var landingModeId by remember { mutableStateOf("auto") }
     var landingEffortValue by remember { mutableStateOf("medium") }
@@ -152,10 +126,6 @@ fun ConversationList(
     var showProjectSheet by remember { mutableStateOf(false) }
     var showDiffSheet by remember { mutableStateOf(false) }
     var showFileBrowserSheet by remember { mutableStateOf(false) }
-    var menuId by remember { mutableStateOf<String?>(null) }
-    var menuAnchor by remember { mutableStateOf(Offset.Zero) }
-    var expandedProjects by remember { mutableStateOf(setOf<String>()) }
-    var workspaceEntries by remember { mutableStateOf<Map<String, List<WorkspaceEntry>>>(emptyMap()) }
 
     val projects = state.catalog?.projects.orEmpty()
     val workspaces = state.catalog?.workspaces.orEmpty()
@@ -179,27 +149,7 @@ fun ConversationList(
     Box(
         Modifier
             .fillMaxSize()
-            .background(colors.bg)
-            .pointerInput(isSidebarOpen) {
-                var totalDx = 0f
-                var startX = 0f
-                detectHorizontalDragGestures(
-                    onDragStart = { offset ->
-                        startX = offset.x
-                        totalDx = 0f
-                    },
-                    onHorizontalDrag = { _, dragAmount ->
-                        totalDx += dragAmount
-                    },
-                    onDragEnd = {
-                        if (!isSidebarOpen && startX < 96f && totalDx > 100f) {
-                            isSidebarOpen = true
-                        } else if (isSidebarOpen && totalDx < -100f) {
-                            isSidebarOpen = false
-                        }
-                    },
-                )
-            },
+            .background(colors.bg),
     ) {
         // Main Calm AI Chat Landing View (1:1 with iOS ConversationsView.landingWorkspaceView)
         Column(
@@ -214,16 +164,12 @@ fun ConversationList(
                     .padding(horizontal = 14.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(
-                    Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(colors.bgElevated)
-                        .clickable { isSidebarOpen = true },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Rounded.Menu, contentDescription = "打开侧边栏", tint = colors.textPrimary, modifier = Modifier.size(18.dp))
-                }
+                AppSidebarButton(
+                    onClick = {
+                        composerMenu = null
+                        onOpenSidebar()
+                    },
+                )
 
                 Spacer(Modifier.weight(1f))
 
@@ -508,305 +454,7 @@ fun ConversationList(
                 } else {
                     null
                 },
-                onFocusChange = { isComposerFocused = it },
             )
-        }
-
-        // Slide-Out Sidebar Scrim
-        AnimatedVisibility(
-            visible = isSidebarOpen,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.zIndex(1f),
-        ) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(0.36f))
-                    .clickable { isSidebarOpen = false },
-            )
-        }
-
-        // Slide-Out Sidebar Drawer (1:1 with iOS ConversationsView.sidebarDrawer)
-        AnimatedVisibility(
-            visible = isSidebarOpen,
-            enter = slideInHorizontally { -it },
-            exit = slideOutHorizontally { -it },
-            modifier = Modifier.zIndex(2f),
-        ) {
-            Column(
-                Modifier
-                    .width(304.dp)
-                    .fillMaxHeight()
-                    .background(colors.bgElevated)
-                    .clickable(enabled = false) {},
-            ) {
-                // Sidebar Top Bar: Segmented Switcher (最近对话 | 项目文件) + New Chat Button
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(
-                        Modifier
-                            .clip(CircleShape)
-                            .background(colors.segmentedTrack)
-                            .padding(3.dp),
-                        horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    ) {
-                        listOf("conversations" to "最近对话", "files" to "项目文件").forEach { (id, label) ->
-                            val selected = sidebarTab == id
-                            Text(
-                                label,
-                                fontSize = 13.sp,
-                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                                color = if (selected) colors.textPrimary else colors.textSecondary,
-                                modifier = Modifier
-                                    .then(
-                                        if (selected) Modifier.shadow(1.5.dp, CircleShape, ambientColor = Color.Black.copy(0.08f))
-                                        else Modifier,
-                                    )
-                                    .clip(CircleShape)
-                                    .background(if (selected) colors.segmentedThumb else Color.Transparent)
-                                    .clickable { sidebarTab = id }
-                                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                            )
-                        }
-                    }
-
-                    Spacer(Modifier.weight(1f))
-
-                    Box(
-                        Modifier
-                            .size(32.dp)
-                            .clip(CircleShape)
-                            .background(colors.bg)
-                            .clickable { isSidebarOpen = false },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(Icons.Rounded.EditNote, contentDescription = "新对话", tint = colors.textPrimary, modifier = Modifier.size(18.dp))
-                    }
-                }
-
-                // Sidebar Search Box
-                Row(
-                    Modifier
-                        .padding(horizontal = 14.dp)
-                        .padding(bottom = 10.dp)
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(colors.bg)
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Icon(Icons.Rounded.Search, null, tint = colors.textSecondary, modifier = Modifier.size(15.dp))
-                    Box(Modifier.weight(1f)) {
-                        if (sidebarSearch.isEmpty()) {
-                            Text(
-                                if (sidebarTab == "conversations") "搜索对话…" else "搜索项目…",
-                                fontSize = 13.5.sp,
-                                color = colors.textTertiary,
-                            )
-                        }
-                        BasicTextField(
-                            value = sidebarSearch,
-                            onValueChange = { sidebarSearch = it },
-                            singleLine = true,
-                            textStyle = TextStyle(color = colors.textPrimary, fontSize = 13.5.sp),
-                            cursorBrush = SolidColor(colors.accent),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                    if (sidebarSearch.isNotEmpty()) {
-                        Icon(
-                            Icons.Rounded.Cancel,
-                            null,
-                            tint = colors.textTertiary,
-                            modifier = Modifier.size(15.dp).clickable { sidebarSearch = "" },
-                        )
-                    }
-                }
-
-                HorizontalDivider(color = colors.hairline)
-
-                // Sidebar Body
-                if (sidebarTab == "conversations") {
-                    val q = sidebarSearch.trim().lowercase()
-                    val filtered = remember(state.conversations, q) {
-                        state.conversations.filter {
-                            q.isEmpty() || it.title.lowercase().contains(q) || it.agentId.lowercase().contains(q)
-                        }
-                    }
-                    LazyColumn(
-                        Modifier.weight(1f).fillMaxWidth(),
-                        contentPadding = PaddingValues(vertical = 10.dp),
-                    ) {
-                        if (currentProject != null) {
-                            item {
-                                Text(
-                                    currentProject.name,
-                                    fontSize = 11.5.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = colors.textSecondary,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                                )
-                            }
-                        }
-                        if (filtered.isEmpty()) {
-                            item {
-                                Text(
-                                    "暂无对话记录",
-                                    fontSize = 13.sp,
-                                    color = colors.textSecondary,
-                                    textAlign = TextAlign.Center,
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
-                                )
-                            }
-                        } else {
-                            items(filtered, key = { it.id }) { item ->
-                                val agent = catalogAgent(state, item.agentId)
-                                val relTime = remember(item.updatedAt) { relativeTime(item.updatedAt) }
-                                Row(
-                                    Modifier
-                                        .padding(horizontal = 8.dp, vertical = 2.dp)
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(9.dp))
-                                        .then(
-                                            longPressModifier(
-                                                onClick = {
-                                                    isSidebarOpen = false
-                                                    model.openConversation(item.id)
-                                                },
-                                                onLongClick = { offset ->
-                                                    menuAnchor = offset
-                                                    menuId = item.id
-                                                },
-                                            ),
-                                        )
-                                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(9.dp),
-                                ) {
-                                    AgentAvatar(item.agentId, size = 20.dp, iconSvg = agent?.iconSvg, displayName = agent?.displayName.orEmpty())
-                                    Text(
-                                        item.title.ifBlank { "未命名对话" },
-                                        fontSize = 13.5.sp,
-                                        color = colors.textPrimary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                    Text(
-                                        relTime,
-                                        fontSize = 10.5.sp,
-                                        color = colors.textTertiary,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    val q = sidebarSearch.trim().lowercase()
-                    val filteredProjects = remember(projects, q) {
-                        projects.filter {
-                            q.isEmpty() || it.name.lowercase().contains(q) || it.path.lowercase().contains(q)
-                        }
-                    }
-                    LazyColumn(
-                        Modifier.weight(1f).fillMaxWidth(),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        items(filteredProjects, key = { it.id }) { proj ->
-                            val ws = workspaces.firstOrNull { it.projectId == proj.id }
-                            val expanded = proj.id in expandedProjects
-                            Column {
-                                Row(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .clickable {
-                                            if (expanded) {
-                                                expandedProjects = expandedProjects - proj.id
-                                            } else {
-                                                expandedProjects = expandedProjects + proj.id
-                                                if (ws != null && !workspaceEntries.containsKey(ws.id)) {
-                                                    model.loadWorkspaceEntries(ws.id) { entries ->
-                                                        workspaceEntries = workspaceEntries + (ws.id to entries)
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        .padding(horizontal = 8.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    Icon(
-                                        if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                                        null,
-                                        tint = colors.textTertiary,
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                    Icon(Icons.Rounded.Folder, null, tint = colors.accent, modifier = Modifier.size(16.dp))
-                                    Text(
-                                        proj.name,
-                                        fontSize = 13.5.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = colors.textPrimary,
-                                        modifier = Modifier.weight(1f),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    if (ws != null) {
-                                        Text(
-                                            "差异",
-                                            fontSize = 11.sp,
-                                            color = colors.accent,
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(6.dp))
-                                                .background(colors.accent.copy(0.12f))
-                                                .clickable {
-                                                    model.selectProject(proj.id)
-                                                    isSidebarOpen = false
-                                                    showDiffSheet = true
-                                                }
-                                                .padding(horizontal = 6.dp, vertical = 2.dp),
-                                        )
-                                    }
-                                }
-                                if (expanded && ws != null) {
-                                    val entries = workspaceEntries[ws.id].orEmpty()
-                                    Column(Modifier.padding(start = 28.dp)) {
-                                        entries.take(30).forEach { entry ->
-                                            Row(
-                                                Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                            ) {
-                                                Icon(
-                                                    if (entry.directory) Icons.Rounded.Folder else Icons.Rounded.Description,
-                                                    null,
-                                                    tint = colors.textSecondary,
-                                                    modifier = Modifier.size(14.dp),
-                                                )
-                                                Text(
-                                                    entry.name,
-                                                    fontSize = 12.5.sp,
-                                                    color = colors.textSecondary,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis,
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         }
 
         // Project Picker Bottom Sheet
@@ -877,19 +525,307 @@ fun ConversationList(
                 onDismiss = { showFileBrowserSheet = false },
             )
         }
+    }
+}
 
-        val menuItem = state.conversations.find { it.id == menuId }
-        if (menuItem != null && state.connection.allowsWrites) {
-            ActionMenu(
-                items = listOf(
-                    ActionMenuItem(if (menuItem.pinned) "取消置顶" else "置顶") { model.pinConversation(menuItem.id, !menuItem.pinned) },
-                    ActionMenuItem("归档") { model.archiveConversation(menuItem.id) },
-                    ActionMenuItem("删除", danger = true) { model.deleteConversation(menuItem.id) },
-                ),
-                anchor = menuAnchor,
-                onDismiss = { menuId = null },
+/** Conversation history and project files, shown in the sidebar under the app navigation. */
+@Composable
+fun ColumnScope.ConversationSidebar(
+    state: UiState,
+    model: CompanionModel,
+    onClose: () -> Unit,
+    onOpenDiff: (projectId: String, workspaceId: String) -> Unit,
+) {
+    val colors = VibexTheme.colors
+    var sidebarTab by remember { mutableStateOf("conversations") }
+    var sidebarSearch by remember { mutableStateOf("") }
+    var menuId by remember { mutableStateOf<String?>(null) }
+    var menuAnchor by remember { mutableStateOf(Offset.Zero) }
+    var expandedProjects by remember { mutableStateOf(setOf<String>()) }
+    var workspaceEntries by remember { mutableStateOf<Map<String, List<WorkspaceEntry>>>(emptyMap()) }
+    val projects = state.catalog?.projects.orEmpty()
+    val workspaces = state.catalog?.workspaces.orEmpty()
+    val currentProject = projects.find { it.id == state.selectedProjectId } ?: projects.firstOrNull()
+
+    // Sidebar Top Bar: Segmented Switcher (最近对话 | 项目文件) + New Chat Button
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            Modifier
+                .clip(CircleShape)
+                .background(colors.segmentedTrack)
+                .padding(3.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            listOf("conversations" to "最近对话", "files" to "项目文件").forEach { (id, label) ->
+                val selected = sidebarTab == id
+                Text(
+                    label,
+                    fontSize = 13.sp,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (selected) colors.textPrimary else colors.textSecondary,
+                    modifier = Modifier
+                        .then(
+                            if (selected) Modifier.shadow(1.5.dp, CircleShape, ambientColor = Color.Black.copy(0.08f))
+                            else Modifier,
+                        )
+                        .clip(CircleShape)
+                        .background(if (selected) colors.segmentedThumb else Color.Transparent)
+                        .clickable { sidebarTab = id }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
+        }
+
+        Spacer(Modifier.weight(1f))
+
+        Box(
+            Modifier
+                .size(32.dp)
+                .clip(CircleShape)
+                .background(colors.bg)
+                .clickable {
+                    onClose()
+                    model.openNewChatLanding()
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.EditNote, contentDescription = "新对话", tint = colors.textPrimary, modifier = Modifier.size(18.dp))
+        }
+    }
+
+    // Sidebar Search Box
+    Row(
+        Modifier
+            .padding(horizontal = 14.dp)
+            .padding(bottom = 10.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(colors.bg)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(Icons.Rounded.Search, null, tint = colors.textSecondary, modifier = Modifier.size(15.dp))
+        Box(Modifier.weight(1f)) {
+            if (sidebarSearch.isEmpty()) {
+                Text(
+                    if (sidebarTab == "conversations") "搜索对话…" else "搜索项目…",
+                    fontSize = 13.5.sp,
+                    color = colors.textTertiary,
+                )
+            }
+            BasicTextField(
+                value = sidebarSearch,
+                onValueChange = { sidebarSearch = it },
+                singleLine = true,
+                textStyle = TextStyle(color = colors.textPrimary, fontSize = 13.5.sp),
+                cursorBrush = SolidColor(colors.accent),
+                modifier = Modifier.fillMaxWidth(),
             )
         }
+        if (sidebarSearch.isNotEmpty()) {
+            Icon(
+                Icons.Rounded.Cancel,
+                null,
+                tint = colors.textTertiary,
+                modifier = Modifier.size(15.dp).clickable { sidebarSearch = "" },
+            )
+        }
+    }
+
+    HorizontalDivider(color = colors.hairline)
+
+    // Sidebar Body
+    if (sidebarTab == "conversations") {
+        val q = sidebarSearch.trim().lowercase()
+        val filtered = remember(state.conversations, q) {
+            state.conversations.filter {
+                q.isEmpty() || it.title.lowercase().contains(q) || it.agentId.lowercase().contains(q)
+            }
+        }
+        LazyColumn(
+            Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(vertical = 10.dp),
+        ) {
+            if (currentProject != null) {
+                item {
+                    Text(
+                        currentProject.name,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.textSecondary,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
+                }
+            }
+            if (filtered.isEmpty()) {
+                item {
+                    Text(
+                        "暂无对话记录",
+                        fontSize = 13.sp,
+                        color = colors.textSecondary,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                    )
+                }
+            } else {
+                items(filtered, key = { it.id }) { item ->
+                    val agent = catalogAgent(state, item.agentId)
+                    val relTime = remember(item.updatedAt) { relativeTime(item.updatedAt) }
+                    Row(
+                        Modifier
+                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(9.dp))
+                            .then(
+                                longPressModifier(
+                                    onClick = {
+                                        onClose()
+                                        model.openConversation(item.id)
+                                    },
+                                    onLongClick = { offset ->
+                                        menuAnchor = offset
+                                        menuId = item.id
+                                    },
+                                ),
+                            )
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(9.dp),
+                    ) {
+                        AgentAvatar(item.agentId, size = 20.dp, iconSvg = agent?.iconSvg, displayName = agent?.displayName.orEmpty())
+                        Text(
+                            item.title.ifBlank { "未命名对话" },
+                            fontSize = 13.5.sp,
+                            color = colors.textPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            relTime,
+                            fontSize = 10.5.sp,
+                            color = colors.textTertiary,
+                        )
+                    }
+                }
+            }
+        }
+    } else {
+        val q = sidebarSearch.trim().lowercase()
+        val filteredProjects = remember(projects, q) {
+            projects.filter {
+                q.isEmpty() || it.name.lowercase().contains(q) || it.path.lowercase().contains(q)
+            }
+        }
+        LazyColumn(
+            Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            items(filteredProjects, key = { it.id }) { proj ->
+                val ws = workspaces.firstOrNull { it.projectId == proj.id }
+                val expanded = proj.id in expandedProjects
+                Column {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                if (expanded) {
+                                    expandedProjects = expandedProjects - proj.id
+                                } else {
+                                    expandedProjects = expandedProjects + proj.id
+                                    if (ws != null && !workspaceEntries.containsKey(ws.id)) {
+                                        model.loadWorkspaceEntries(ws.id) { entries ->
+                                            workspaceEntries = workspaceEntries + (ws.id to entries)
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(horizontal = 8.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(
+                            if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                            null,
+                            tint = colors.textTertiary,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Icon(Icons.Rounded.Folder, null, tint = colors.accent, modifier = Modifier.size(16.dp))
+                        Text(
+                            proj.name,
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = colors.textPrimary,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (ws != null) {
+                            Text(
+                                "差异",
+                                fontSize = 11.sp,
+                                color = colors.accent,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(colors.accent.copy(0.12f))
+                                    .clickable {
+                                        onClose()
+                                        onOpenDiff(proj.id, ws.id)
+                                    }
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
+                    }
+                    if (expanded && ws != null) {
+                        val entries = workspaceEntries[ws.id].orEmpty()
+                        Column(Modifier.padding(start = 28.dp)) {
+                            entries.take(30).forEach { entry ->
+                                Row(
+                                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Icon(
+                                        if (entry.directory) Icons.Rounded.Folder else Icons.Rounded.Description,
+                                        null,
+                                        tint = colors.textSecondary,
+                                        modifier = Modifier.size(14.dp),
+                                    )
+                                    Text(
+                                        entry.name,
+                                        fontSize = 12.5.sp,
+                                        color = colors.textSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    val menuItem = state.conversations.find { it.id == menuId }
+    if (menuItem != null && state.connection.allowsWrites) {
+        ActionMenu(
+            items = listOf(
+                ActionMenuItem(if (menuItem.pinned) "取消置顶" else "置顶") { model.pinConversation(menuItem.id, !menuItem.pinned) },
+                ActionMenuItem("归档") { model.archiveConversation(menuItem.id) },
+                ActionMenuItem("删除", danger = true) { model.deleteConversation(menuItem.id) },
+            ),
+            anchor = menuAnchor,
+            onDismiss = { menuId = null },
+        )
     }
 }
 

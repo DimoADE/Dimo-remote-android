@@ -148,7 +148,6 @@ fun PromptBar(
     onSelectMode: (String) -> Unit,
     onSelectOption: (String, String) -> Unit,
     onOpenFileBrowser: (() -> Unit)? = null,
-    onFocusChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = VibexTheme.colors
@@ -373,7 +372,6 @@ fun PromptBar(
                                 .fillMaxWidth()
                                 .heightIn(min = 24.dp)
                                 .onFocusChanged { focusState ->
-                                    onFocusChange(focusState.isFocused)
                                     if (focusState.isFocused && menu != null) {
                                         onMenuChange(null)
                                     }

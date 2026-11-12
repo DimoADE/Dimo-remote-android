@@ -148,7 +148,7 @@ private enum class CollabTab(val title: String) {
 fun CollaborationScreen(
     state: UiState,
     model: CompanionModel,
-    onChatOpenChange: (Boolean) -> Unit = {},
+    onOpenSidebar: () -> Unit,
 ) {
     val c = VibexTheme.colors
     val scope = rememberCoroutineScope()
@@ -163,9 +163,6 @@ fun CollaborationScreen(
 
     var activeChatItem by remember { mutableStateOf<CollabSidebarItem?>(null) }
     var openedBotConversationId by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(activeChatItem != null || openedBotConversationId != null) {
-        onChatOpenChange(activeChatItem != null || openedBotConversationId != null)
-    }
 
     var showAddMenu by remember { mutableStateOf(false) }
     var showProjectMenu by remember { mutableStateOf(false) }
@@ -262,54 +259,62 @@ fun CollaborationScreen(
                 // The list stays composed under an open chat; keep it out of TalkBack's reach.
                 .then(if (activeChatItem != null) Modifier.clearAndSetSemantics { } else Modifier),
         ) {
-            // Top Header Bar (Project Selector | 协作空间 | + Menu) — Strictly Centered Title
+            // Top Header Bar (Sidebar Button + Project Selector | 协作空间 | + Menu) — Strictly Centered Title
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 10.dp),
             ) {
-                Box(modifier = Modifier.align(Alignment.CenterStart)) {
-                    Surface(
-                        onClick = { showProjectMenu = true },
-                        shape = RoundedCornerShape(50),
-                        color = c.bgElevated,
-                        border = BorderStroke(0.5.dp, c.stroke),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                // Half the bar minus half the centered title, so a long project name truncates instead of running under it.
+                Row(
+                    modifier = Modifier.align(Alignment.CenterStart).fillMaxWidth(0.5f).padding(end = 42.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    AppSidebarButton(onClick = onOpenSidebar)
+                    Box {
+                        Surface(
+                            onClick = { showProjectMenu = true },
+                            shape = RoundedCornerShape(50),
+                            color = c.bgElevated,
+                            border = BorderStroke(0.5.dp, c.stroke),
                         ) {
-                            Icon(Icons.Outlined.Folder, contentDescription = null, tint = c.textSecondary, modifier = Modifier.size(13.dp))
-                            Text(
-                                text = activeProject?.name ?: "项目",
-                                color = c.textPrimary,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.widthIn(max = 110.dp),
-                            )
-                            Icon(Icons.Outlined.UnfoldMore, contentDescription = null, tint = c.textSecondary, modifier = Modifier.size(12.dp))
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            ) {
+                                Icon(Icons.Outlined.Folder, contentDescription = null, tint = c.textSecondary, modifier = Modifier.size(13.dp))
+                                Text(
+                                    text = activeProject?.name ?: "项目",
+                                    color = c.textPrimary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                Icon(Icons.Outlined.UnfoldMore, contentDescription = null, tint = c.textSecondary, modifier = Modifier.size(12.dp))
+                            }
                         }
-                    }
-                    DropdownMenu(
-                        expanded = showProjectMenu,
-                        onDismissRequest = { showProjectMenu = false },
-                    ) {
-                        state.catalog?.projects.orEmpty().forEach { project ->
-                            DropdownMenuItem(
-                                text = { Text(project.name) },
-                                trailingIcon = {
-                                    if (state.selectedProjectId == project.id) {
-                                        Icon(Icons.Outlined.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    }
-                                },
-                                onClick = {
-                                    showProjectMenu = false
-                                    model.selectProjectInPlace(project.id)
-                                },
-                            )
+                        DropdownMenu(
+                            expanded = showProjectMenu,
+                            onDismissRequest = { showProjectMenu = false },
+                        ) {
+                            state.catalog?.projects.orEmpty().forEach { project ->
+                                DropdownMenuItem(
+                                    text = { Text(project.name) },
+                                    trailingIcon = {
+                                        if (state.selectedProjectId == project.id) {
+                                            Icon(Icons.Outlined.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        }
+                                    },
+                                    onClick = {
+                                        showProjectMenu = false
+                                        model.selectProjectInPlace(project.id)
+                                    },
+                                )
+                            }
                         }
                     }
                 }

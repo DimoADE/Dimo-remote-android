@@ -3,29 +3,18 @@ package dev.vibex.companion.app.ui
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ContentTransform
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.GridView
-import androidx.compose.material.icons.outlined.Groups
-import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.rounded.ChatBubble
 import androidx.compose.material.icons.rounded.Computer
-import androidx.compose.material.icons.rounded.GridView
-import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.KeyOff
-import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -37,7 +26,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -67,9 +55,6 @@ private fun CompanionShell(state: UiState, model: CompanionModel) {
     val isPairModal = state.route is Route.ManualPair
     val settingsSub = (state.route as? Route.Settings)?.section != null
     val inCollabChat = state.route is Route.Collaboration && state.selectedThread != null
-    var isConversationsChromeHidden by remember { mutableStateOf(false) }
-    var isCollabChatOpen by remember { mutableStateOf(false) }
-    val isKeyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
 
     BackHandler(enabled = fullscreen || isPairModal || settingsSub || inCollabChat || state.route is Route.Folders) {
         when {
@@ -152,33 +137,6 @@ private fun CompanionShell(state: UiState, model: CompanionModel) {
     if (!fullscreen && !isPairModal) tabRouteHolder.route = state.route
     val tabRoute = tabRouteHolder.route
 
-    val tabs = listOf(
-        LiquidTab(
-            "对话",
-            Icons.Outlined.ChatBubbleOutline,
-            Icons.Rounded.ChatBubble,
-            tabRoute is Route.Conversations || tabRoute is Route.Folders,
-        ) { model.go(Route.Conversations) },
-        LiquidTab(
-            "看板",
-            Icons.Outlined.GridView,
-            Icons.Rounded.GridView,
-            tabRoute is Route.Status,
-        ) { model.go(Route.Status) },
-        LiquidTab(
-            "协作空间",
-            Icons.Outlined.Groups,
-            Icons.Rounded.Groups,
-            tabRoute is Route.Collaboration,
-        ) { model.go(Route.Collaboration) },
-        LiquidTab(
-            "设置",
-            Icons.Outlined.Settings,
-            Icons.Rounded.Settings,
-            tabRoute is Route.Settings,
-        ) { model.go(Route.Settings()) },
-    )
-
     val hasServer = state.profiles.isNotEmpty()
     val authExpired = state.connection == ConnectionState.AuthRequired
     val manualConnectNeeded = hasServer && !state.autoConnect && state.connection == ConnectionState.Offline
@@ -208,9 +166,12 @@ private fun CompanionShell(state: UiState, model: CompanionModel) {
         state.error?.let { HostBanner(it, hostBannerSeverity(it)) { model.dismissNotice() } }
         state.notice?.let { HostBanner(it, NoticeSeverity.Info) { model.dismissNotice() } }
     }
+    var isSidebarOpen by remember { mutableStateOf(false) }
+    val openSidebar = { isSidebarOpen = true }
+    var sidebarDiffWorkspaceId by remember { mutableStateOf<String?>(null) }
     val requiresServer: @Composable (@Composable () -> Unit) -> Unit = { content ->
         if (showConnectGate) {
-            DesktopEmptyState(state = state, model = model, authExpired = authExpired)
+            DesktopEmptyState(state = state, model = model, authExpired = authExpired, onOpenSidebar = openSidebar)
         } else {
             content()
         }
@@ -236,85 +197,92 @@ private fun CompanionShell(state: UiState, model: CompanionModel) {
         )
     }
 
-    GlowBackground {
-        AnimatedContent(
-            targetState = layer,
-            transitionSpec = { layerTransition(initialState, targetState) },
-            modifier = Modifier.fillMaxSize(),
-            label = "shellLayer",
-        ) { shownLayer ->
-            when (shownLayer) {
-                ShellLayer.Login -> Box(Modifier.fillMaxSize()) {
-                    LoginScreen(state = state, model = model, onPairWithCode = { model.go(Route.ManualPair) })
-                    Column(Modifier.align(Alignment.TopCenter).statusBarsPadding()) {
-                        state.error?.let { HostBanner(it, hostBannerSeverity(it)) { model.dismissNotice() } }
-                    }
-                }
-                ShellLayer.Pairing -> PairingCodeScreen(
-                    state = state,
-                    model = model,
-                    onScan = launchScanner,
-                    onDismiss = { model.go(Route.Conversations) },
-                )
-                is ShellLayer.Conversation -> Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(colors.bg)
-                        .statusBarsPadding(),
-                ) {
-                    TimelinePane(state, model, shownLayer.conversationId)
-                    Column(Modifier.align(Alignment.TopCenter)) {
-                        hostNotices()
-                    }
-                }
-                ShellLayer.Tabs -> {
-                    val pageCoversBottomBar = inCollabChat ||
-                        (tabRoute is Route.Collaboration && isCollabChatOpen) ||
-                        (tabRoute is Route.Conversations && isConversationsChromeHidden)
-                    val showFloatingNavBar = !isKeyboardVisible && !pageCoversBottomBar
+    sidebarDiffWorkspaceId?.let { workspaceId ->
+        DiffListSheet(
+            workspaceId = workspaceId,
+            conversationId = state.conversations.firstOrNull()?.id.orEmpty(),
+            model = model,
+            onDismiss = { sidebarDiffWorkspaceId = null },
+        )
+    }
 
-                    Box(Modifier.fillMaxSize().background(colors.bg)) {
-                        Column(
-                            Modifier
+    GlowBackground {
+        AppSidebarDrawer(
+            state = state,
+            model = model,
+            isOpen = isSidebarOpen,
+            onOpenChange = { isSidebarOpen = it },
+            gesturesEnabled = layer is ShellLayer.Tabs || layer is ShellLayer.Conversation,
+            sidebar = {
+                if (state.route.destination == AppDestination.Conversations && !showConnectGate) {
+                    ConversationSidebar(
+                        state = state,
+                        model = model,
+                        onClose = { isSidebarOpen = false },
+                        onOpenDiff = { projectId, workspaceId ->
+                            model.selectProject(projectId)
+                            sidebarDiffWorkspaceId = workspaceId
+                        },
+                    )
+                }
+            },
+        ) {
+            AnimatedContent(
+                targetState = layer,
+                transitionSpec = { layerTransition(initialState, targetState) },
+                modifier = Modifier.fillMaxSize(),
+                label = "shellLayer",
+            ) { shownLayer ->
+                when (shownLayer) {
+                    ShellLayer.Login -> Box(Modifier.fillMaxSize()) {
+                        LoginScreen(state = state, model = model, onPairWithCode = { model.go(Route.ManualPair) })
+                        Column(Modifier.align(Alignment.TopCenter).statusBarsPadding()) {
+                            state.error?.let { HostBanner(it, hostBannerSeverity(it)) { model.dismissNotice() } }
+                        }
+                    }
+                    ShellLayer.Pairing -> PairingCodeScreen(
+                        state = state,
+                        model = model,
+                        onScan = launchScanner,
+                        onDismiss = { model.go(Route.Conversations) },
+                    )
+                    is ShellLayer.Conversation -> Box(
+                        Modifier
+                            .fillMaxSize()
+                            .background(colors.bg)
+                            .statusBarsPadding(),
+                    ) {
+                        TimelinePane(state, model, shownLayer.conversationId, onOpenSidebar = openSidebar)
+                        Column(Modifier.align(Alignment.TopCenter)) {
+                            hostNotices()
+                        }
+                    }
+                    ShellLayer.Tabs -> Box(Modifier.fillMaxSize().background(colors.bg)) {
+                        AnimatedContent(
+                            targetState = tabRoute,
+                            transitionSpec = { tabTransition(initialState, targetState) },
+                            modifier = Modifier
                                 .fillMaxSize()
                                 .statusBarsPadding()
-                                .navigationBarsPadding()
-                                .padding(bottom = if (showFloatingNavBar) 66.dp else 0.dp),
-                        ) {
-                            AnimatedContent(
-                                targetState = tabRoute,
-                                transitionSpec = { tabTransition(initialState, targetState) },
-                                modifier = Modifier.fillMaxSize(),
-                                label = "tabRoute",
-                            ) { route ->
-                                Box(Modifier.fillMaxSize().background(colors.bg)) {
-                                    when (route) {
-                                        is Route.Settings -> SettingsScreen(
-                                            state = state,
-                                            model = model,
-                                            section = route.section,
-                                            onOpen = { model.go(Route.Settings(it)) },
-                                            onBack = { model.go(Route.Settings()) },
-                                            onScan = launchScanner,
-                                            onManualPair = { model.go(Route.ManualPair) },
-                                        )
-                                        Route.Folders -> requiresServer { FoldersScreen(state, model) }
-                                        Route.Status -> requiresServer { StatusScreen(state, model) }
-                                        Route.Collaboration -> requiresServer {
-                                            CollaborationScreen(
-                                                state = state,
-                                                model = model,
-                                                onChatOpenChange = { isCollabChatOpen = it },
-                                            )
-                                        }
-                                        else -> requiresServer {
-                                            ConversationList(
-                                                state = state,
-                                                model = model,
-                                                onChromeHiddenChange = { isConversationsChromeHidden = it },
-                                            )
-                                        }
-                                    }
+                                .navigationBarsPadding(),
+                            label = "tabRoute",
+                        ) { route ->
+                            Box(Modifier.fillMaxSize().background(colors.bg)) {
+                                when (route) {
+                                    is Route.Settings -> SettingsScreen(
+                                        state = state,
+                                        model = model,
+                                        section = route.section,
+                                        onOpen = { model.go(Route.Settings(it)) },
+                                        onBack = { model.go(Route.Settings()) },
+                                        onScan = launchScanner,
+                                        onManualPair = { model.go(Route.ManualPair) },
+                                        onOpenSidebar = openSidebar,
+                                    )
+                                    Route.Folders -> requiresServer { FoldersScreen(state, model) }
+                                    Route.Status -> requiresServer { StatusScreen(state, model, openSidebar) }
+                                    Route.Collaboration -> requiresServer { CollaborationScreen(state, model, openSidebar) }
+                                    else -> requiresServer { ConversationList(state, model, openSidebar) }
                                 }
                             }
                         }
@@ -324,16 +292,6 @@ private fun CompanionShell(state: UiState, model: CompanionModel) {
                                 .statusBarsPadding(),
                         ) {
                             hostNotices()
-                        }
-                        if (!isKeyboardVisible) {
-                            AnimatedVisibility(
-                                visible = !pageCoversBottomBar,
-                                enter = NavMotion.bottomBarEnter,
-                                exit = NavMotion.bottomBarExit,
-                                modifier = Modifier.align(Alignment.BottomCenter),
-                            ) {
-                                LiquidNavBar(tabs = tabs)
-                            }
                         }
                     }
                 }
@@ -387,8 +345,19 @@ private fun tabTransition(from: Route, to: Route): ContentTransform {
 }
 
 @Composable
-private fun DesktopEmptyState(state: UiState, model: CompanionModel, authExpired: Boolean) {
+private fun DesktopEmptyState(
+    state: UiState,
+    model: CompanionModel,
+    authExpired: Boolean,
+    onOpenSidebar: () -> Unit,
+) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        AppSidebarButton(
+            onClick = onOpenSidebar,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+        )
         EmptyState(
             icon = if (authExpired) Icons.Rounded.KeyOff else Icons.Rounded.Computer,
             title = if (authExpired) "连接凭据已失效" else "未连接电脑",
@@ -403,3 +372,4 @@ private fun DesktopEmptyState(state: UiState, model: CompanionModel, authExpired
         )
     }
 }
+
