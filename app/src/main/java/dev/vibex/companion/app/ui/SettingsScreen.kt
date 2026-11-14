@@ -48,6 +48,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -84,6 +85,7 @@ import dev.vibex.companion.app.monitor.CompanionMonitorService
 import dev.vibex.companion.app.ui.theme.Appearance
 import dev.vibex.companion.app.ui.theme.PlexMono
 import dev.vibex.companion.app.ui.theme.VibexTheme
+import dev.vibex.companion.app.update.AppUpdateManager
 
 @Composable
 fun SettingsScreen(
@@ -116,7 +118,6 @@ private fun SettingsIndex(
     val colors = VibexTheme.colors
     val selected = state.profiles.find { it.hostId == state.selectedHostId } ?: state.profiles.firstOrNull()
     val isOnline = state.connection == ConnectionState.Online
-    val versionStr = state.hostVersion.takeIf { it.isNotBlank() }?.let { "v$it" } ?: "v0.4.5"
 
     LazyColumn(
         Modifier.fillMaxSize().background(colors.bg),
@@ -369,6 +370,9 @@ private fun SettingsIndex(
 
         // 4. About & Version Card (1:1 with iOS screenshot)
         item {
+            val context = LocalContext.current
+            val updateManager = remember(context) { AppUpdateManager.getInstance(context) }
+            val updateState by updateManager.state.collectAsState()
             IosSettingsCard {
                 IosSettingsRow(
                     icon = Icons.Rounded.Info,
@@ -380,27 +384,11 @@ private fun SettingsIndex(
                     onClick = { onOpen(SettingsSection.About) },
                 )
                 HorizontalDivider(color = colors.hairline, modifier = Modifier.padding(start = 56.dp))
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 13.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    ColoredIconBadge(Icons.Rounded.Verified, Color(0xFF34C759))
-                    Text(
-                        "当前版本",
-                        fontSize = 15.5.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = colors.textPrimary,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        "$versionStr (协议 v${state.hostProtocol.ifBlank { "1.0" }})",
-                        fontSize = 13.sp,
-                        color = colors.textSecondary,
-                    )
-                }
+                SettingsVersionUpdateRow(
+                    state = updateState,
+                    protocolVersion = state.hostProtocol,
+                    onClick = { updateManager.openUpdateDialog() },
+                )
             }
         }
         item { Spacer(Modifier.height(12.dp)) }
@@ -1231,18 +1219,22 @@ private fun LazyListScope.NotificationSettings(state: UiState, model: CompanionM
 
 private fun LazyListScope.AboutSettings(state: UiState) {
     item {
+        val context = LocalContext.current
+        val updateManager = remember(context) { AppUpdateManager.getInstance(context) }
+        val updateState by updateManager.state.collectAsState()
         val colors = VibexTheme.colors
         IosSettingsCard {
             Column(
                 Modifier.fillMaxWidth().padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 BrandMark(56.dp)
                 Text("VibeX Companion", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.textPrimary)
                 Text(
-                    "v${state.hostVersion.ifBlank { "0.4.5" }} (协议 v${state.hostProtocol.ifBlank { "1.0" }})",
+                    "客户端 v${updateState.currentVersionName} (#${updateState.currentVersionCode}) · 协议 v${state.hostProtocol.ifBlank { "1.0" }}",
                     fontSize = 13.sp,
+                    fontFamily = PlexMono,
                     color = colors.textSecondary,
                 )
                 Text(
@@ -1250,6 +1242,11 @@ private fun LazyListScope.AboutSettings(state: UiState) {
                     fontSize = 12.5.sp,
                     color = colors.textTertiary,
                     textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(4.dp))
+                AboutUpdateActionButton(
+                    state = updateState,
+                    onClick = { updateManager.openUpdateDialog() },
                 )
             }
         }

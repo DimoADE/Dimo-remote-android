@@ -1,7 +1,12 @@
 package dev.vibex.companion.app.ui
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.platform.LocalContext
+import dev.vibex.companion.app.update.AppUpdateManager
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ContentTransform
@@ -95,6 +100,22 @@ private fun CompanionShell(state: UiState, model: CompanionModel) {
     }
 
     val colors = VibexTheme.colors
+    val context = LocalContext.current
+    val updateManager = remember(context) { AppUpdateManager.getInstance(context) }
+    val updateState by updateManager.state.collectAsState()
+
+    LaunchedEffect(updateState.statusToast) {
+        val toastMsg = updateState.statusToast ?: return@LaunchedEffect
+        Toast.makeText(context, toastMsg, Toast.LENGTH_SHORT).show()
+        updateManager.consumeStatusToast()
+    }
+
+    AppUpdateDialog(
+        state = updateState,
+        onConfirmUpdate = { updateManager.startDownloadAndInstall() },
+        onDismiss = { updateManager.dismissDialog() },
+    )
+
     state.pendingCloudFallbackOrigin?.let {
         val hostName = state.pendingCloudFallbackHostName ?: "VibeX 桌面端"
         AlertDialog(

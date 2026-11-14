@@ -60,6 +60,6 @@ fun SplashScreen() {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         BrandMark(88.dp)
-        Text("VibeX", style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.onBackground)
+        Text("Dimo", style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.onBackground)
     }
 }

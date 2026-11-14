@@ -11,8 +11,8 @@ android {
         applicationId = "dev.vibex.companion"
         minSdk = 26
         targetSdk = 35
-        versionCode = 18
-        versionName = "0.4.5"
+        versionCode = 19
+        versionName = "0.4.6"
         vectorDrawables.useSupportLibrary = true
     }
     buildTypes {
@@ -24,7 +24,10 @@ android {
             isMinifyEnabled = false
         }
     }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
