@@ -94,10 +94,9 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onScan: () -> Unit,
     onManualPair: () -> Unit = {},
-    onOpenSidebar: () -> Unit,
 ) {
     when (section) {
-        null -> SettingsIndex(state, model, onOpen, onOpenSidebar)
+        null -> SettingsIndex(state, model, onOpen)
         SettingsSection.Profile -> SettingsPage("个人资料", onBack) { ProfileSettings(state) }
         SettingsSection.Account -> SettingsPage("VibeX 账号", onBack) { AccountSettings(state, model, onOpen) }
         SettingsSection.Connection -> SettingsPage("已配对的电脑", onBack) { ConnectionSettings(state, model, onScan, onManualPair) }
@@ -113,7 +112,6 @@ private fun SettingsIndex(
     state: UiState,
     model: CompanionModel,
     onOpen: (SettingsSection) -> Unit,
-    onOpenSidebar: () -> Unit,
 ) {
     val colors = VibexTheme.colors
     val selected = state.profiles.find { it.hostId == state.selectedHostId } ?: state.profiles.firstOrNull()
@@ -122,12 +120,21 @@ private fun SettingsIndex(
 
     LazyColumn(
         Modifier.fillMaxSize().background(colors.bg),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        contentPadding = PaddingValues(
+            start = 16.dp,
+            end = 16.dp,
+            top = 12.dp,
+            bottom = BOTTOM_DOCK_CLEARANCE + 16.dp,
+        ),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                AppSidebarButton(onClick = onOpenSidebar, modifier = Modifier.align(Alignment.CenterStart))
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                contentAlignment = Alignment.Center,
+            ) {
                 Text(
                     "设置",
                     fontSize = 18.sp,

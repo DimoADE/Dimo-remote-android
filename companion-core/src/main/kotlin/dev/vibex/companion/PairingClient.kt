@@ -59,7 +59,20 @@ data class DiscoveredLanHost(
     val origin: String,
     val hostId: String?,
     val name: String,
-)
+) {
+    val id: String
+        get() = hostId ?: origin
+
+    val isCloudService: Boolean
+        get() = origin.contains("/t/") || origin.contains("vibex.xforever.xin")
+
+    val displayName: String
+        get() {
+            val trimmed = name.trim()
+            if (trimmed.isNotEmpty() && !trimmed.startsWith("http")) return trimmed
+            return origin.removePrefix("http://").removePrefix("https://")
+        }
+}
 
 data class DeviceConnectRequestResult(
     val requestId: String,

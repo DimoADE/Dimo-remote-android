@@ -221,6 +221,78 @@ class HostApiCatalogTest {
         assertEquals("skill:/tmp/office-xlsx:office-xlsx", commands.single().key)
         assertEquals("/skill:/tmp/office-xlsx:office-xlsx", commands.single().value)
     }
+
+    @Test
+    fun catalogMarksUninstalledBuiltInAgentsUnusableViaManagementBarAndLifecycleFallback() {
+        val catalogBody = """{"data":{"projects":[],"workspaces":[],"agents":[
+          {"id":"claude_code","ready":true,"usable":true,"lifecycle":"ready","displayName":"Claude Code"},
+          {"id":"codex","ready":true,"usable":true,"lifecycle":"not_installed","displayName":"Codex"},
+          {"id":"kimi","ready":true,"usable":true,"lifecycle":"ready","displayName":"Kimi"}
+        ]}}"""
+        val barBody = """{"data":[
+          {"agent_id":"kimi","position":0,"enabled":true,"retired":false,"lifecycle":"ready"},
+          {"agent_id":"claude_code","position":1,"enabled":true,"retired":false,"lifecycle":"ready"},
+          {"agent_id":"codex","position":2,"enabled":true,"retired":false,"lifecycle":"not_installed"}
+        ]}"""
+        val routed = HostApi(
+            CommandRoutedTransport(
+                mapOf(
+                    "conversation_catalog" to (200 to catalogBody),
+                    "agent_management_bar" to (200 to barBody),
+                ),
+            ),
+        ).catalog(HostOrigin.parse("http://127.0.0.1:17891"), "token")
+        assertEquals(listOf("kimi", "claude_code", "codex"), routed.agents.map { it.id })
+        assertEquals(true, routed.agents[0].usable)
+        assertEquals(true, routed.agents[1].usable)
+        assertEquals(false, routed.agents[2].usable)
+
+        val fallback = HostApi(
+            CommandRoutedTransport(
+                mapOf(
+                    "conversation_catalog" to (200 to catalogBody),
+                    "agent_management_bar" to (500 to """{"message":"unsupported"}"""),
+                ),
+            ),
+        ).catalog(HostOrigin.parse("http://127.0.0.1:17891"), "token")
+        assertEquals(true, fallback.agents.first { it.id == "claude_code" }.usable)
+        assertEquals(false, fallback.agents.first { it.id == "codex" }.usable)
+        assertTrue(fallback.agents.first { it.id == "claude_code" }.modelOptions.single().choices.isNotEmpty())
+    }
+
+    @Test
+    fun hostTimestampParserSupportsIsoAndSqliteUtcAndRecentReadWindow() {
+        val isoMs = parseHostTimestampEpochMillis(" 2026-11-14T12:00:00Z ")
+        val sqliteMs = parseHostTimestampEpochMillis("2026-11-14 12:00:00.123456")
+        assertTrue(isoMs != null)
+        assertTrue(sqliteMs != null)
+        assertEquals(isoMs!! + 123L, sqliteMs!!)
+
+        val summary = KanbanSessionSummary(
+            id = "s1",
+            workspaceId = "w1",
+            status = KanbanSessionStatus.Done,
+            updatedAt = "2026-11-14 12:00:00",
+        )
+        assertEquals(true, summary.isRecentlyActiveReadSession(emptySet(), nowMs = isoMs + 3600_000L))
+        assertEquals(false, summary.isRecentlyActiveReadSession(setOf("s1"), nowMs = isoMs + 3600_000L))
+        assertEquals(false, summary.isRecentlyActiveReadSession(emptySet(), nowMs = isoMs + 25L * 3600_000L))
+    }
+}
+
+private class CommandRoutedTransport(
+    private val routes: Map<String, Pair<Int, String>>,
+) : HttpTransport {
+    override fun execute(
+        method: String,
+        url: String,
+        headers: Map<String, String>,
+        body: String?,
+    ): HttpExchange {
+        val hit = routes.entries.firstOrNull { (cmd, _) -> url.endsWith("/$cmd") }?.value
+            ?: (404 to """{"message":"not found"}""")
+        return HttpExchange(hit.first, hit.second)
+    }
 }
 
 private class OneShotTransport(

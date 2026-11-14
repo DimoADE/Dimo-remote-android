@@ -115,6 +115,9 @@ data class VibeXAccountOverview(
     val hasActiveCreditsOrTier: Boolean
         get() = user.tier != "regular" || balanceMicro > 0L || activeGrants.isNotEmpty()
 
+    val canUseCloudRelay: Boolean
+        get() = relayPermission ?: hasActiveCreditsOrTier
+
     val planDisplayName: String
         get() = when (user.tier) {
             "subscriber" -> "VibeX 订阅会员"

@@ -82,6 +82,7 @@ import dev.vibex.companion.setKanbanSessionPinned
 import dev.vibex.companion.updateKanbanSessionStatus
 import dev.vibex.companion.app.data.CredentialStore
 import dev.vibex.companion.app.data.HostProfile
+import dev.vibex.companion.app.data.ModelPreferencesStore
 import dev.vibex.companion.app.data.OfflineStore
 import dev.vibex.companion.app.data.ProfileStore
 import dev.vibex.companion.app.data.StoredReachability
@@ -191,6 +192,12 @@ data class UiState(
     val accountError: String? = null,
     val accountLoginRequested: Boolean = false,
     val desktopConnect: DesktopConnectSheet? = null,
+    val connectedSasNotice: ConnectedSasNotice? = null,
+    val isAutoConnectingInBackground: Boolean = false,
+    val autoConnectingHostName: String? = null,
+    val lanSasState: LanSasInlineState? = null,
+    val collabUnreadCount: Int = 0,
+    val manuallyCompletedSessionIds: Set<String> = emptySet(),
     val route: Route = Route.Conversations,
 ) {
     /** Signed out with nothing paired, or right after an explicit sign-out. */
@@ -204,6 +211,7 @@ sealed class Route {
     data object ManualPair : Route()
     data object Folders : Route()
     data object Conversations : Route()
+    data object NewThread : Route()
     data object Status : Route()
     data object Collaboration : Route()
     data class Settings(val section: SettingsSection? = null) : Route()
@@ -219,9 +227,15 @@ data class CollabDetailBundle(
 )
 
 private const val PREF_ACCOUNT_LOGIN_REQUESTED = "account_login_requested"
+private const val PREF_MANUALLY_COMPLETED_SESSIONS = "vibex.manuallyCompletedSessionIDs"
+
+/** The desktop revokes a phone when another phone connects, it signs out, or the user removes it. */
+private const val REVOKED_FAILURE_REASON = "连接授权已失效"
+private const val REVOKED_NOTICE = "电脑已收回本机的连接授权，请重新连接"
 
 class CompanionModel(application: Application) : AndroidViewModel(application) {
     private val prefs = application.getSharedPreferences("vibex_companion_prefs", Context.MODE_PRIVATE)
+    val modelPrefs = ModelPreferencesStore(application)
     private val profiles = ProfileStore(application)
     private val credentials = CredentialStore(application)
     private val offline = OfflineStore(application)
@@ -237,8 +251,10 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
     private var pingJob: Job? = null
     private var timelinePollJob: Job? = null
     private var connectPollJob: Job? = null
+    private var lanSasPollJob: Job? = null
     private var autoReconnectJob: Job? = null
     private var noticeDismissJob: Job? = null
+    private var sasNoticeDismissJob: Job? = null
     private var pendingConflictRetryAction: (() -> Unit)? = null
     private val declinedCloudFallbackHostIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val notifiedEventKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
@@ -254,9 +270,7 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
     @Volatile
     private var didSeedKnownConversations: Boolean = false
     @Volatile
-    private var hasAutoOpenedInitialConversation: Boolean = false
-    @Volatile
-    private var userRequestedNewChatLanding: Boolean = false
+    private var didAttemptInitialAccountAutoConnect: Boolean = false
     @Volatile
     private var boostPollingUntil: Long = 0L
 
@@ -268,12 +282,40 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun presentConnectedSasNotice(hostName: String, sasCode: String) {
+        val code = sasCode.trim()
+        if (code.isEmpty()) return
+        val notice = ConnectedSasNotice(
+            id = java.util.UUID.randomUUID().toString(),
+            hostName = hostName.ifBlank { "电脑" },
+            sasCode = code,
+        )
+        sasNoticeDismissJob?.cancel()
+        _state.update { it.copy(connectedSasNotice = notice) }
+        sasNoticeDismissJob = viewModelScope.launch {
+            delay(4_500L)
+            _state.update { current ->
+                if (current.connectedSasNotice?.id == notice.id) current.copy(connectedSasNotice = null) else current
+            }
+        }
+    }
+
+    fun dismissConnectedSasNotice() {
+        sasNoticeDismissJob?.cancel()
+        sasNoticeDismissJob = null
+        _state.update { it.copy(connectedSasNotice = null) }
+    }
+
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state
 
     init {
         val stored = profiles.load()
         val savedAutoConnect = prefs.getBoolean("auto_connect", true)
+        val savedManualDone = prefs.getStringSet(PREF_MANUALLY_COMPLETED_SESSIONS, emptySet())
+            .orEmpty()
+            .filter { it.isNotBlank() }
+            .toSet()
         val selectedHostId = stored.selectedHostId ?: stored.profiles.firstOrNull()?.hostId
         val selected = stored.profiles.find { it.hostId == selectedHostId }
         val hasAccountToken = accountRepo.getToken() != null
@@ -287,6 +329,7 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
             autoConnect = savedAutoConnect,
             accountSignedIn = hasAccountToken,
             accountLoginRequested = prefs.getBoolean(PREF_ACCOUNT_LOGIN_REQUESTED, false),
+            manuallyCompletedSessionIds = savedManualDone,
             route = Route.Conversations,
             connection = if (stored.profiles.isEmpty() || !savedAutoConnect) ConnectionState.Offline else ConnectionState.Connecting,
             connectionFailureReason = if (!savedAutoConnect && stored.profiles.isNotEmpty()) "自动连接已关闭" else null,
@@ -467,19 +510,39 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Opens the「发现你的电脑」popup and refreshes the account's desktops and the LAN scan. */
+    /** Opens the「连接你的电脑」popup and refreshes the account's desktops and the LAN scan. */
     fun openDesktopConnect() {
-        if (!_state.value.accountSignedIn) return
         connectPollJob?.cancel()
-        _state.update { it.copy(desktopConnect = DesktopConnectSheet()) }
-        refreshAccount()
+        val signedIn = _state.value.accountSignedIn
+        val initialStage = if (signedIn && _state.value.accountDesktops.isEmpty()) {
+            DesktopConnectStage.Syncing
+        } else {
+            DesktopConnectStage.Choosing
+        }
+        val initialSelected = _state.value.accountDesktops.firstOrNull()?.hostId
+        _state.update {
+            it.copy(
+                desktopConnect = DesktopConnectSheet(stage = initialStage, selectedHostId = initialSelected),
+                isAutoConnectingInBackground = false,
+                autoConnectingHostName = null,
+            )
+        }
+        if (signedIn) {
+            refreshAccount()
+        }
         discoverHosts()
     }
 
     fun dismissDesktopConnect() {
         connectPollJob?.cancel()
         connectPollJob = null
-        _state.update { it.copy(desktopConnect = null) }
+        _state.update {
+            it.copy(
+                desktopConnect = null,
+                isAutoConnectingInBackground = false,
+                autoConnectingHostName = null,
+            )
+        }
     }
 
     fun selectAccountDesktop(hostId: String) {
@@ -490,74 +553,343 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
 
     fun retryDesktopConnect() {
         val stage = _state.value.desktopConnect?.stage as? DesktopConnectStage.Failed ?: return
-        val route = stage.route
-        if (route == null) openDesktopConnect() else connectAccountDesktop(route)
+        val target = stage.retryTarget
+        if (target == null) openDesktopConnect() else connectDesktopTarget(target)
     }
 
     /** LAN origin of an account desktop when the current Wi-Fi scan found it. */
     fun lanOriginFor(desktop: AccountDesktop): String? =
-        _state.value.discoveredHosts.firstOrNull { it.hostId == desktop.hostId }?.origin
+        _state.value.discoveredHosts.firstOrNull {
+            !it.isCloudService && AccountDesktops.rawHostId(it.hostId.orEmpty()) == desktop.hostId
+        }?.origin
 
-    fun connectAccountDesktop(route: DesktopConnectRoute, replaceExistingMobile: Boolean = false) {
+    fun connectSelectedAccountDesktop() {
         val current = _state.value
-        val sheet = current.desktopConnect ?: return
-        val desktop = current.accountDesktops.firstOrNull { it.hostId == sheet.selectedHostId } ?: return
-        val originUrl = when (route) {
-            DesktopConnectRoute.Lan -> lanOriginFor(desktop) ?: return
-            DesktopConnectRoute.Cloud -> AccountDesktops.tenantOrigin(
-                AccountDesktops.relayBase(current.accountOverview?.assignedRelayServer, PairingClient.DEFAULT_OFFICIAL_RELAY_BASE),
-                desktop.hostId,
-            )
+        val hostId = current.desktopConnect?.selectedHostId ?: current.accountDesktops.firstOrNull()?.hostId
+        val desktop = current.accountDesktops.firstOrNull { it.hostId == hostId } ?: current.accountDesktops.firstOrNull() ?: return
+        connectDesktopTarget(DesktopConnectTarget.Account(desktop))
+    }
+
+    fun connectLanHostInSheet(host: DiscoveredLanHost) {
+        connectDesktopTarget(DesktopConnectTarget.Lan(host))
+    }
+
+    fun connectDesktopTarget(
+        target: DesktopConnectTarget,
+        replaceExistingMobile: Boolean = false,
+        silentUntilNeeded: Boolean = false,
+    ) {
+        fun setStage(stage: DesktopConnectStage) {
+            _state.update { current ->
+                val baseSheet = current.desktopConnect ?: DesktopConnectSheet(
+                    selectedHostId = (target as? DesktopConnectTarget.Account)?.desktop?.hostId
+                        ?: current.accountDesktops.firstOrNull()?.hostId,
+                )
+                current.copy(
+                    desktopConnect = baseSheet.copy(stage = stage),
+                    isAutoConnectingInBackground = false,
+                    autoConnectingHostName = null,
+                )
+            }
         }
-        val origin = runCatching { HostOrigin.parse(originUrl) }.getOrNull() ?: return
-        if (route == DesktopConnectRoute.Cloud) PairingClient.rememberRelayBase(origin.value)
-        val reachabilityKind = if (route == DesktopConnectRoute.Lan) "lan" else "published"
-        fun setStage(stage: DesktopConnectStage) =
-            _state.update { it.copy(desktopConnect = it.desktopConnect?.copy(stage = stage)) }
 
         connectPollJob?.cancel()
         connectPollJob = viewModelScope.launch {
-            setStage(DesktopConnectStage.Connecting(route))
-            val saved = current.accountSavedHosts.firstOrNull {
-                AccountDesktops.rawHostId(it.hostId) == desktop.hostId && it.accessToken.isNotBlank()
-            }
-            if (saved != null) {
-                val existing = current.profiles.firstOrNull { AccountDesktops.rawHostId(it.hostId) == desktop.hostId }
-                val hostId = existing?.hostId ?: desktop.hostId
-                credentials.put(hostId, saved.accessToken)
-                val base = existing ?: HostProfile(
-                    hostId = hostId,
-                    name = desktop.hostName,
-                    deviceId = saved.deviceId.ifBlank { saved.profileId },
-                    reachability = emptyList(),
-                    lastSuccessOrigin = null,
-                    lastSyncAt = System.currentTimeMillis(),
-                )
-                val profile = base.copy(
-                    reachability = (listOf(StoredReachability(origin.value, reachabilityKind)) + base.reachability)
-                        .distinctBy { it.origin },
-                    lastSuccessOrigin = origin.value,
-                )
-                upsertProfile(profile, selected = true)
-                connect(profile, allowCloudSwitch = route == DesktopConnectRoute.Cloud)
-                val revoked = _state.value.profiles.none { it.hostId == hostId }
-                if (!revoked) {
-                    if (_state.value.connection != ConnectionState.Online) {
-                        setStage(DesktopConnectStage.Failed(_state.value.connectionFailureReason ?: "电脑离线", route))
-                    }
-                    return@launch
+            if (silentUntilNeeded) {
+                _state.update {
+                    it.copy(
+                        isAutoConnectingInBackground = true,
+                        autoConnectingHostName = target.displayName,
+                    )
                 }
-                // The synced credential was revoked on the desktop; ask it for a fresh one instead.
-                _state.update { it.copy(error = null, connectionFailureReason = null, accountSavedHosts = it.accountSavedHosts - saved) }
+            } else {
+                setStage(DesktopConnectStage.Connecting(target))
             }
 
-            val accountToken = accountRepo.getToken()
-            if (accountToken == null) {
-                signOutAccount()
+            val candidates = mutableListOf<Pair<HostOrigin, String>>()
+            when (target) {
+                is DesktopConnectTarget.Account -> {
+                    val desktop = target.desktop
+                    var lanUrl = lanOriginFor(desktop)
+                    if (lanUrl == null) {
+                        val scanned = withContext(Dispatchers.IO) {
+                            runCatching { PairingClient.discoverLanHosts() }.getOrDefault(emptyList())
+                        }
+                        if (scanned.isNotEmpty()) {
+                            _state.update { it.copy(discoveredHosts = scanned) }
+                            lanUrl = scanned.firstOrNull {
+                                !it.isCloudService && AccountDesktops.rawHostId(it.hostId.orEmpty()) == desktop.hostId
+                            }?.origin
+                        }
+                    }
+                    lanUrl?.let { url ->
+                        runCatching { HostOrigin.parse(url) }.getOrNull()?.let { candidates += it to "lan" }
+                    }
+                    val current = _state.value
+                    val canUseCloud = current.accountOverview?.canUseCloudRelay ?: true
+                    if (canUseCloud) {
+                        val cloudUrl = AccountDesktops.tenantOrigin(
+                            AccountDesktops.relayBase(
+                                current.accountOverview?.assignedRelayServer,
+                                PairingClient.DEFAULT_OFFICIAL_RELAY_BASE,
+                            ),
+                            desktop.hostId,
+                        )
+                        runCatching { HostOrigin.parse(cloudUrl) }.getOrNull()?.let { origin ->
+                            PairingClient.rememberRelayBase(origin.value)
+                            candidates += origin to "published"
+                        }
+                    }
+                }
+                is DesktopConnectTarget.Lan -> {
+                    val kind = if (target.host.isCloudService) "published" else "lan"
+                    runCatching { HostOrigin.parse(target.host.origin) }.getOrNull()?.let {
+                        candidates += it to kind
+                    }
+                }
+            }
+
+            if (candidates.isEmpty()) {
+                if (silentUntilNeeded) {
+                    _state.update { it.copy(isAutoConnectingInBackground = false, autoConnectingHostName = null) }
+                } else {
+                    setStage(DesktopConnectStage.Failed("当前不在同一 Wi-Fi，且账号未开通云服务", target))
+                }
                 return@launch
             }
+
+            // 1. Try existing synced/local credential fast-path if available
+            if (target is DesktopConnectTarget.Account) {
+                val desktop = target.desktop
+                val current = _state.value
+                val saved = current.accountSavedHosts.firstOrNull {
+                    AccountDesktops.rawHostId(it.hostId) == desktop.hostId && it.accessToken.isNotBlank()
+                }
+                if (saved != null) {
+                    val existing = current.profiles.firstOrNull { AccountDesktops.rawHostId(it.hostId) == desktop.hostId }
+                    val hostId = existing?.hostId ?: desktop.hostId
+                    credentials.put(hostId, saved.accessToken)
+                    val primary = candidates.first()
+                    val base = existing ?: HostProfile(
+                        hostId = hostId,
+                        name = desktop.hostName,
+                        deviceId = saved.deviceId.ifBlank { saved.profileId },
+                        reachability = emptyList(),
+                        lastSuccessOrigin = null,
+                        lastSyncAt = System.currentTimeMillis(),
+                    )
+                    val mergedReach = (candidates.map { StoredReachability(it.first.value, it.second) } + base.reachability)
+                        .distinctBy { it.origin }
+                    val profile = base.copy(
+                        reachability = mergedReach,
+                        lastSuccessOrigin = primary.first.value,
+                    )
+                    upsertProfile(profile, selected = true)
+                    connect(profile, allowCloudSwitch = candidates.any { it.second == "published" })
+                    val revoked = _state.value.profiles.none { it.hostId == hostId }
+                    if (!revoked) {
+                        if (_state.value.connection == ConnectionState.Online) {
+                            _state.update {
+                                it.copy(
+                                    desktopConnect = null,
+                                    isAutoConnectingInBackground = false,
+                                    autoConnectingHostName = null,
+                                )
+                            }
+                            return@launch
+                        }
+                        if (silentUntilNeeded) {
+                            _state.update { it.copy(isAutoConnectingInBackground = false, autoConnectingHostName = null) }
+                        } else {
+                            setStage(DesktopConnectStage.Failed(_state.value.connectionFailureReason ?: "电脑离线", target))
+                        }
+                        return@launch
+                    }
+                    _state.update {
+                        it.copy(
+                            error = null,
+                            connectionFailureReason = null,
+                            accountSavedHosts = it.accountSavedHosts - saved,
+                        )
+                    }
+                }
+            }
+
+            // 2. Request connect (with optional same-account JWT for zero-click auto-approval)
+            val accountToken = accountRepo.getToken()
+            var lastFailure: Throwable? = null
+            var chosenOrigin: HostOrigin? = null
+            var chosenKind = "lan"
+            var requestedResult: dev.vibex.companion.DeviceConnectRequestResult? = null
+
+            for ((origin, kind) in candidates) {
+                val attempt = withContext(Dispatchers.IO) {
+                    runCatching {
+                        pairingClient.requestConnect(
+                            origin = origin,
+                            deviceName = Build.MODEL.ifBlank { "Android Companion" },
+                            replaceExistingMobile = replaceExistingMobile,
+                            accountToken = accountToken,
+                        )
+                    }
+                }
+                val ok = attempt.getOrNull()
+                if (ok != null) {
+                    chosenOrigin = origin
+                    chosenKind = kind
+                    requestedResult = ok
+                    break
+                }
+                val err = attempt.exceptionOrNull()
+                if (err is MobileDeviceConflictException) {
+                    _state.update { it.copy(isAutoConnectingInBackground = false, autoConnectingHostName = null) }
+                    pendingConflictRetryAction = {
+                        connectDesktopTarget(target, replaceExistingMobile = true, silentUntilNeeded = false)
+                    }
+                    _state.update { it.copy(pendingConflictDeviceName = err.existingDeviceName) }
+                    return@launch
+                }
+                if (err is AccountLinkException && err.failure == AccountLinkFailure.AccountTokenInvalid) {
+                    _state.update { it.copy(isAutoConnectingInBackground = false, autoConnectingHostName = null) }
+                    signOutAccount()
+                    return@launch
+                }
+                // If account verification mismatched/signed out on LAN, retry without accountToken so manual 4-digit SAS works
+                if (err is AccountLinkException && (
+                        err.failure == AccountLinkFailure.AccountMismatch ||
+                            err.failure == AccountLinkFailure.HostAccountSignedOut ||
+                            err.failure == AccountLinkFailure.VerificationUnavailable
+                        )
+                ) {
+                    val unauthAttempt = withContext(Dispatchers.IO) {
+                        runCatching {
+                            pairingClient.requestConnect(
+                                origin = origin,
+                                deviceName = Build.MODEL.ifBlank { "Android Companion" },
+                                replaceExistingMobile = replaceExistingMobile,
+                                accountToken = null,
+                            )
+                        }
+                    }
+                    val unauthOk = unauthAttempt.getOrNull()
+                    if (unauthOk != null) {
+                        chosenOrigin = origin
+                        chosenKind = kind
+                        requestedResult = unauthOk
+                        break
+                    }
+                }
+                lastFailure = err
+            }
+
+            val origin = chosenOrigin
+            val requested = requestedResult
+            if (origin == null || requested == null) {
+                if (silentUntilNeeded) {
+                    _state.update { it.copy(isAutoConnectingInBackground = false, autoConnectingHostName = null) }
+                } else {
+                    val msg = lastFailure?.let(::desktopConnectErrorMessage) ?: "无法连接到电脑，请确认电脑端在线"
+                    setStage(DesktopConnectStage.Failed(msg, target))
+                }
+                return@launch
+            }
+
+            suspend fun adoptApprovedConnection(
+                cred: dev.vibex.remote.v1.DeviceCredential,
+                rawHostId: String,
+                rawHostName: String?,
+                sasCode: String,
+            ) {
+                val resolvedHostId = rawHostId.ifBlank { target.hostId.orEmpty() }.ifBlank { "host:${origin.value.hashCode()}" }
+                credentials.put(resolvedHostId, cred.access_token)
+                val allReach = (
+                    listOf(StoredReachability(origin.value, chosenKind)) +
+                        candidates.map { StoredReachability(it.first.value, it.second) }
+                    ).distinctBy { it.origin }
+                val profile = HostProfile(
+                    hostId = resolvedHostId,
+                    name = rawHostName?.ifBlank { null } ?: target.displayName,
+                    deviceId = cred.device_id,
+                    reachability = allReach,
+                    lastSuccessOrigin = origin.value,
+                    lastSyncAt = System.currentTimeMillis(),
+                    selectedProjectId = null,
+                )
+                upsertProfile(profile, selected = true)
+                setAccountLoginRequested(false)
+                _state.update {
+                    it.copy(
+                        desktopConnect = null,
+                        isAutoConnectingInBackground = false,
+                        autoConnectingHostName = null,
+                        lanSasState = null,
+                        route = if (it.route == Route.ManualPair) Route.Conversations else it.route,
+                    )
+                }
+                presentConnectedSasNotice(profile.name, sasCode)
+                SystemNotifier.notifyStatus(getApplication(), "已连接电脑", "${profile.name} · 连接码 $sasCode")
+                connect(profile, allowCloudSwitch = candidates.any { it.second == "published" })
+                if (_state.value.connection != ConnectionState.Online && !silentUntilNeeded) {
+                    setStage(DesktopConnectStage.Failed(_state.value.connectionFailureReason ?: "电脑离线", target))
+                }
+            }
+
+            // Same-account auto-approved in 0ms!
+            if (requested.status == "approved" && requested.credential != null) {
+                adoptApprovedConnection(
+                    cred = requested.credential!!,
+                    rawHostId = requested.hostId,
+                    rawHostName = requested.hostName,
+                    sasCode = requested.sasCode,
+                )
+                return@launch
+            }
+
+            // Manual approval required on desktop: show 4-digit SAS code
+            val displayHost = requested.hostName?.ifBlank { null } ?: target.displayName
+            setStage(DesktopConnectStage.AwaitingApproval(target, requested.sasCode, displayHost))
+
+            while (isActive) {
+                delay(1_200)
+                val poll = withContext(Dispatchers.IO) {
+                    runCatching { pairingClient.pollConnect(origin, requested.requestId) }.getOrNull()
+                } ?: continue
+                when (poll.status) {
+                    "approved" -> {
+                        val cred = poll.credential ?: continue
+                        adoptApprovedConnection(
+                            cred = cred,
+                            rawHostId = poll.hostId,
+                            rawHostName = poll.hostName ?: requested.hostName,
+                            sasCode = poll.sasCode.ifBlank { requested.sasCode },
+                        )
+                        return@launch
+                    }
+                    "rejected" -> {
+                        setStage(DesktopConnectStage.Failed(DESKTOP_APPROVAL_REJECTED, target))
+                        return@launch
+                    }
+                    "expired" -> {
+                        setStage(DesktopConnectStage.Failed(DESKTOP_APPROVAL_EXPIRED, target))
+                        return@launch
+                    }
+                }
+            }
+        }
+    }
+
+    fun connectLanHostInline(host: DiscoveredLanHost, replaceExistingMobile: Boolean = false) {
+        lanSasPollJob?.cancel()
+        lanSasPollJob = viewModelScope.launch {
+            _state.update { it.copy(lanSasState = LanSasInlineState.Connecting(host), error = null) }
+            val origin = runCatching { HostOrigin.parse(host.origin) }.getOrNull()
+            if (origin == null) {
+                _state.update { it.copy(lanSasState = null, error = "无效的电脑地址") }
+                return@launch
+            }
+            val accountToken = accountRepo.getToken()
             val requested = withContext(Dispatchers.IO) {
-                runCatching {
+                val primary = runCatching {
                     pairingClient.requestConnect(
                         origin = origin,
                         deviceName = Build.MODEL.ifBlank { "Android Companion" },
@@ -565,58 +897,106 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                         accountToken = accountToken,
                     )
                 }
-            }.getOrElse { err ->
-                when {
-                    err is MobileDeviceConflictException -> {
-                        pendingConflictRetryAction = { connectAccountDesktop(route, replaceExistingMobile = true) }
-                        _state.update { it.copy(pendingConflictDeviceName = err.existingDeviceName) }
+                if (primary.isSuccess) {
+                    primary
+                } else {
+                    val err = primary.exceptionOrNull()
+                    if (accountToken != null && err is AccountLinkException) {
+                        runCatching {
+                            pairingClient.requestConnect(
+                                origin = origin,
+                                deviceName = Build.MODEL.ifBlank { "Android Companion" },
+                                replaceExistingMobile = replaceExistingMobile,
+                                accountToken = null,
+                            )
+                        }
+                    } else {
+                        primary
                     }
-                    err is AccountLinkException && err.failure == AccountLinkFailure.AccountTokenInvalid -> signOutAccount()
-                    else -> setStage(DesktopConnectStage.Failed(desktopConnectErrorMessage(err), route))
+                }
+            }.getOrElse { err ->
+                _state.update { it.copy(lanSasState = null) }
+                if (err is MobileDeviceConflictException) {
+                    pendingConflictRetryAction = { connectLanHostInline(host, replaceExistingMobile = true) }
+                    _state.update { it.copy(pendingConflictDeviceName = err.existingDeviceName) }
+                } else {
+                    fail(err)
                 }
                 return@launch
             }
-            setStage(DesktopConnectStage.AwaitingApproval(route, requested.sasCode))
 
+            suspend fun finishInlineApproved(
+                cred: dev.vibex.remote.v1.DeviceCredential,
+                rawHostId: String,
+                rawHostName: String?,
+                sasCode: String,
+            ) {
+                val resolvedHostId = rawHostId.ifBlank { host.hostId.orEmpty() }.ifBlank { "host:${origin.value.hashCode()}" }
+                credentials.put(resolvedHostId, cred.access_token)
+                val kind = if (host.isCloudService) "published" else "lan"
+                val profile = HostProfile(
+                    hostId = resolvedHostId,
+                    name = rawHostName?.ifBlank { null } ?: host.displayName,
+                    deviceId = cred.device_id,
+                    reachability = listOf(StoredReachability(origin.value, kind)),
+                    lastSuccessOrigin = origin.value,
+                    lastSyncAt = System.currentTimeMillis(),
+                    selectedProjectId = null,
+                )
+                upsertProfile(profile, selected = true)
+                setAccountLoginRequested(false)
+                _state.update { it.copy(lanSasState = null, route = Route.Conversations, error = null) }
+                presentConnectedSasNotice(profile.name, sasCode)
+                connect(profile, allowCloudSwitch = host.isCloudService)
+            }
+
+            if (requested.status == "approved" && requested.credential != null) {
+                finishInlineApproved(
+                    cred = requested.credential!!,
+                    rawHostId = requested.hostId,
+                    rawHostName = requested.hostName,
+                    sasCode = requested.sasCode,
+                )
+                return@launch
+            }
+
+            val hostLabel = requested.hostName?.ifBlank { null } ?: host.displayName
+            _state.update {
+                it.copy(lanSasState = LanSasInlineState.AwaitingApproval(host, requested.sasCode, hostLabel))
+            }
             while (isActive) {
-                delay(1_500)
+                delay(1_200)
                 val poll = withContext(Dispatchers.IO) {
                     runCatching { pairingClient.pollConnect(origin, requested.requestId) }.getOrNull()
                 } ?: continue
                 when (poll.status) {
                     "approved" -> {
                         val cred = poll.credential ?: continue
-                        val hostId = poll.hostId.ifBlank { desktop.hostId }
-                        credentials.put(hostId, cred.access_token)
-                        val profile = HostProfile(
-                            hostId = hostId,
-                            name = (poll.hostName ?: requested.hostName)?.ifBlank { null } ?: desktop.hostName,
-                            deviceId = cred.device_id,
-                            reachability = listOf(StoredReachability(origin.value, reachabilityKind)),
-                            lastSuccessOrigin = origin.value,
-                            lastSyncAt = System.currentTimeMillis(),
-                            selectedProjectId = null,
+                        finishInlineApproved(
+                            cred = cred,
+                            rawHostId = poll.hostId,
+                            rawHostName = poll.hostName ?: requested.hostName,
+                            sasCode = poll.sasCode.ifBlank { requested.sasCode },
                         )
-                        upsertProfile(profile, selected = true)
-                        _state.update { it.copy(route = Route.Conversations) }
-                        SystemNotifier.notifyStatus(getApplication(), "已连接电脑", profile.name)
-                        connect(profile, allowCloudSwitch = route == DesktopConnectRoute.Cloud)
-                        if (_state.value.connection != ConnectionState.Online) {
-                            setStage(DesktopConnectStage.Failed(_state.value.connectionFailureReason ?: "电脑离线", route))
-                        }
                         return@launch
                     }
                     "rejected" -> {
-                        setStage(DesktopConnectStage.Failed(DESKTOP_APPROVAL_REJECTED, route))
+                        _state.update { it.copy(lanSasState = null, error = DESKTOP_APPROVAL_REJECTED) }
                         return@launch
                     }
                     "expired" -> {
-                        setStage(DesktopConnectStage.Failed(DESKTOP_APPROVAL_EXPIRED, route))
+                        _state.update { it.copy(lanSasState = null, error = DESKTOP_APPROVAL_EXPIRED) }
                         return@launch
                     }
                 }
             }
         }
+    }
+
+    fun cancelLanHostInline() {
+        lanSasPollJob?.cancel()
+        lanSasPollJob = null
+        _state.update { it.copy(lanSasState = null) }
     }
 
 
@@ -841,9 +1221,8 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openNewChatLanding() {
-        userRequestedNewChatLanding = true
         timelinePollJob?.cancel()
-        _state.update { it.copy(route = Route.Conversations, timeline = null) }
+        _state.update { it.copy(route = Route.NewThread, timeline = null) }
     }
 
     private var activeInlineConversationId: String? = null
@@ -853,8 +1232,6 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
 
     fun openConversation(id: String) {
         activeInlineConversationId = null
-        userRequestedNewChatLanding = false
-        hasAutoOpenedInitialConversation = true
         _state.update { it.copy(route = Route.Timeline(id), timeline = sessions[id]?.snapshot()) }
         viewModelScope.launch { attachConversation(id) }
         startTimelinePoller(id)
@@ -882,7 +1259,9 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
             delay(800)
             while (isActive && currentObservedConversationId() == id) {
                 val session = sessions[id]
-                val fast = session?.inFlightTurnId != null || System.currentTimeMillis() < boostPollingUntil
+                val fast = session?.inFlightTurnId != null ||
+                    (session?.optimisticThinkingUntilMs ?: 0L) > System.currentTimeMillis() ||
+                    System.currentTimeMillis() < boostPollingUntil
                 runCatching { syncConversationTimeline(id, forceRows = fast) }
                 if (fast) {
                     delay(900)
@@ -929,23 +1308,13 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                         resolvedWorkspaceId,
                         resolvedAgentId,
                         title.ifBlank { null },
-                        prompt.ifBlank { null },
+                        null,
                     )
                 }
                 locallyCreatedConversationIds.add(created.id)
                 knownConversationIds.add(created.id)
+                unmarkManuallyCompleted(created.id)
                 val agent = _state.value.catalog?.agents?.find { it.id == resolvedAgentId }
-                withContext(Dispatchers.IO) {
-                    runCatching { api.ensureSessionControls(origin, token, created.id) }
-                    if (!modeId.isNullOrBlank()) {
-                        runCatching { api.setSessionMode(origin, token, created.id, modeId) }
-                    }
-                    config.forEach { (key, value) ->
-                        if (key.isNotBlank() && value.isNotBlank()) {
-                            runCatching { api.setSessionConfigOption(origin, token, created.id, key, value) }
-                        }
-                    }
-                }
                 val boundAgent = created.agentId.ifBlank { resolvedAgentId }
                 val boundWorkspace = created.workspaceId.ifBlank { resolvedWorkspaceId }
                 val session = sessions.getOrPut(created.id) {
@@ -968,10 +1337,17 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                     options = bound?.sessionConfig.orEmpty(),
                     selected = config,
                 )
+                if (prompt.isNotBlank()) {
+                    boostPollingUntil = System.currentTimeMillis() + 30_000L
+                    synchronized(session) {
+                        session.beginOptimisticSend(prompt)
+                    }
+                }
                 val summary = created.copy(
                     workspaceId = boundWorkspace,
                     title = title.ifBlank { created.title },
                     agentId = boundAgent,
+                    status = if (prompt.isNotBlank()) "inprogress" else created.status,
                 )
                 _state.update { state ->
                     state.copy(
@@ -979,10 +1355,33 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
                 openConversation(created.id)
-                if (prompt.isNotBlank()) {
-                    send(created.id, prompt)
+
+                // Apply mode/config & initial prompt in background without blocking navigation
+                viewModelScope.launch {
+                    runCatching {
+                        withContext(Dispatchers.IO) {
+                            if (!modeId.isNullOrBlank()) {
+                                runCatching { api.setSessionMode(origin, token, created.id, modeId) }
+                            }
+                            config.forEach { (key, value) ->
+                                if (key.isNotBlank() && value.isNotBlank()) {
+                                    runCatching { api.setSessionConfigOption(origin, token, created.id, key, value) }
+                                }
+                            }
+                            if (prompt.isNotBlank()) {
+                                api.submitInput(origin, token, created.id, boundAgent, boundWorkspace, prompt)
+                            }
+                        }
+                        if (prompt.isNotBlank()) {
+                            syncConversationTimeline(created.id, forceRows = true)
+                        }
+                        runCatching { loadConversations(silent = true) }
+                    }.onFailure { err ->
+                        synchronized(session) { session.clearOptimisticSend() }
+                        publishTimeline(session)
+                        fail(err)
+                    }
                 }
-                viewModelScope.launch { runCatching { loadConversations() } }
             }.onFailure { fail(it) }
         }
     }
@@ -1043,8 +1442,20 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
     fun setSessionConfig(conversationId: String, key: String, value: String) {
         if (!_state.value.connection.allowsWrites || key.isBlank()) return
         sessions[conversationId]?.let { session ->
-            val index = session.sessionConfig.indexOfFirst { it.key == key }
-            if (index >= 0) session.sessionConfig[index] = session.sessionConfig[index].copy(value = value)
+            synchronized(session) {
+                val index = session.sessionConfig.indexOfFirst { it.key == key }
+                if (index >= 0) {
+                    val existing = session.sessionConfig[index]
+                    val nextChoices = if (existing.choices.any { it.value == value }) {
+                        existing.choices
+                    } else {
+                        existing.choices + CatalogAgent.makeCustomChoice(value)
+                    }
+                    session.sessionConfig[index] = existing.copy(value = value, choices = nextChoices)
+                } else {
+                    session.sessionConfig += CatalogAgent.makeCustomModelOption(key = key, modelId = value)
+                }
+            }
             publishTimeline(session)
         }
         viewModelScope.launch {
@@ -1104,6 +1515,7 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
 
     fun send(conversationId: String, text: String) {
         if (!_state.value.connection.allowsWrites || text.isBlank()) return
+        unmarkManuallyCompleted(conversationId)
         val summary = selectedConversation(conversationId)
         val session = sessions.getOrPut(conversationId) {
             TimelineSession().also {
@@ -1113,42 +1525,75 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                 it.workspaceId = summary?.workspaceId.orEmpty()
             }
         }
-        if (session.agentId.isBlank()) session.agentId = summary?.agentId.orEmpty()
-        if (session.workspaceId.isBlank()) session.workspaceId = summary?.workspaceId.orEmpty()
+        val agentId = synchronized(session) {
+            if (session.agentId.isBlank()) session.agentId = summary?.agentId.orEmpty()
+            if (session.workspaceId.isBlank()) session.workspaceId = summary?.workspaceId.orEmpty()
+            val resolvedAg = session.agentId.ifBlank { summary?.agentId.orEmpty() }
+                .ifBlank {
+                    _state.value.catalog?.agents?.firstOrNull { it.usable }?.id
+                        ?: _state.value.catalog?.agents?.firstOrNull()?.id
+                        ?: "claude_code"
+                }
+            session.agentId = resolvedAg
+            session.beginOptimisticSend(text)
+            resolvedAg
+        }
+        boostPollingUntil = System.currentTimeMillis() + 30_000L
+        publishTimeline(session)
+
         viewModelScope.launch {
             runCatching {
-                val agentId = session.agentId.ifBlank { summary?.agentId.orEmpty() }
-                    .ifBlank {
-                        _state.value.catalog?.agents?.firstOrNull { it.usable }?.id
-                            ?: _state.value.catalog?.agents?.firstOrNull()?.id
-                            ?: "claude_code"
-                    }
-                session.agentId = agentId
-                val workspaceId = session.workspaceId.ifBlank { summary?.workspaceId.orEmpty() }
+                val workspaceId = synchronized(session) { session.workspaceId }
+                    .ifBlank { summary?.workspaceId.orEmpty() }
                     .ifBlank { currentCollaborationWorkspaceId() }
                 if (workspaceId.isBlank()) error("会话还没有工作区")
-                session.workspaceId = workspaceId
-                boostPollingUntil = System.currentTimeMillis() + 30_000L
+                synchronized(session) { session.workspaceId = workspaceId }
                 val (origin, token) = live()
-                val localId = "local:${System.currentTimeMillis()}"
-                if (session.inFlightTurnId == null) session.inFlightTurnId = "local"
-                session.rows += dev.vibex.companion.TimelineRow(
-                    id = localId,
-                    kind = "user",
-                    title = "",
-                    body = text,
-                    tone = dev.vibex.companion.TimelineTone.Quiet,
-                )
-                publishTimeline(session)
                 withContext(Dispatchers.IO) {
                     api.submitInput(origin, token, conversationId, agentId, workspaceId, text)
                 }
-                syncConversationTimeline(conversationId)
-                if (session.rows.any { it.kind == "user" && it.id != localId && it.body == text }) {
-                    session.rows.removeAll { it.id == localId }
-                }
+                syncConversationTimeline(conversationId, forceRows = true)
+            }.onFailure { err ->
+                synchronized(session) { session.clearOptimisticSend() }
                 publishTimeline(session)
-            }.onFailure { fail(it) }
+                fail(err)
+            }
+        }
+    }
+
+    fun markSessionViewed(conversationId: String) {
+        if (!_state.value.connection.allowsWrites || conversationId.isBlank()) return
+        viewModelScope.launch {
+            runCatching {
+                mutateKanbanSessionViewed(conversationId)
+                loadConversations(silent = true)
+            }
+        }
+    }
+
+    fun setManualSessionStatus(sessionId: String, status: KanbanSessionStatus) {
+        if (!_state.value.connection.allowsWrites) return
+        val nextSet = _state.value.manuallyCompletedSessionIds.toMutableSet().apply {
+            if (status == KanbanSessionStatus.Done) add(sessionId) else remove(sessionId)
+        }
+        prefs.edit().putStringSet(PREF_MANUALLY_COMPLETED_SESSIONS, nextSet).apply()
+        _state.update { it.copy(manuallyCompletedSessionIds = nextSet) }
+        viewModelScope.launch {
+            runCatching { mutateKanbanSessionStatus(sessionId, status) }.onFailure { fail(it) }
+        }
+    }
+
+    private fun unmarkManuallyCompleted(sessionId: String) {
+        if (sessionId !in _state.value.manuallyCompletedSessionIds) return
+        val nextSet = _state.value.manuallyCompletedSessionIds - sessionId
+        prefs.edit().putStringSet(PREF_MANUALLY_COMPLETED_SESSIONS, nextSet).apply()
+        _state.update { it.copy(manuallyCompletedSessionIds = nextSet) }
+    }
+
+    fun updateCollabUnreadCount(count: Int) {
+        val safe = count.coerceAtLeast(0)
+        if (_state.value.collabUnreadCount != safe) {
+            _state.update { it.copy(collabUnreadCount = safe) }
         }
     }
 
@@ -1497,8 +1942,11 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
             val (origin, token) = live()
             val catalog = withContext(Dispatchers.IO) { api.catalog(origin, token) }
             val selected = _state.value.selectedProjectId
-            val stillValid = selected != null && catalog.projects.any { it.id == selected }
-            val resolvedProject = if (stillValid) selected else catalog.projects.firstOrNull()?.id
+            val resolvedProject = if (selected == null || catalog.projects.any { it.id == selected }) {
+                selected
+            } else {
+                null
+            }
             _state.update {
                 it.copy(
                     catalog = catalog,
@@ -1507,13 +1955,27 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                     error = null,
                 )
             }
-            if (resolvedProject != null) {
-                loadConversations()
-            }
+            loadConversations()
         } catch (error: Throwable) {
             _state.update { it.copy(catalogLoading = false) }
             throw error
         }
+    }
+
+    /**
+     * The account relay URL of a desktop signed in to the same account. It lets the phone reach
+     * that desktop off-LAN even when the profile never learned a published origin.
+     */
+    private fun accountTenantOriginFor(hostId: String): String? {
+        val current = _state.value
+        if (!current.accountSignedIn || current.accountOverview?.canUseCloudRelay == false) return null
+        val rawHostId = AccountDesktops.rawHostId(hostId)
+        if (current.accountDesktops.none { it.hostId == rawHostId }) return null
+        val relayBase = AccountDesktops.relayBase(
+            current.accountOverview?.assignedRelayServer,
+            PairingClient.DEFAULT_OFFICIAL_RELAY_BASE,
+        )
+        return AccountDesktops.tenantOrigin(relayBase, rawHostId)
     }
 
     private fun handleForcedOfflineByRevocation(hostId: String? = _state.value.selectedHostId) {
@@ -1532,12 +1994,12 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                 activeOrigin = null,
                 connection = ConnectionState.Offline,
                 realtimeRttMs = null,
-                connectionFailureReason = "已被其他手机接管下线",
+                connectionFailureReason = REVOKED_FAILURE_REASON,
                 conversations = emptyList(),
                 timeline = null,
                 inbox = emptyList(),
                 pairing = false,
-                error = "当前电脑已切换至其他手机远程连接，本机已强制下线并清除凭据，下次需重新连接",
+                error = REVOKED_NOTICE,
             )
         }
     }
@@ -1630,7 +2092,9 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                 Regex("""^http://(192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)""").containsMatchIn(lower)
         }
 
+        val canUseCloudRelay = _state.value.accountSignedIn && (_state.value.accountOverview?.canUseCloudRelay == true)
         val wasLanMode = !allowCloudSwitch &&
+            !canUseCloudRelay &&
             profile.lastSuccessOrigin != null &&
             isLanOriginUrl(profile.lastSuccessOrigin)
 
@@ -1756,7 +2220,8 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                 lower.contains(":17890") ||
                 lower.contains(":17891")
         }
-        val combinedRemote = (rendezvousOrigins + cleanRemoteCandidates).distinct()
+        val combinedRemote = (rendezvousOrigins + cleanRemoteCandidates + listOfNotNull(accountTenantOriginFor(profile.hostId)))
+            .distinct()
 
         // If previously connected via LAN direct, ask the user before switching to Cloud Service!
         if (wasLanMode) {
@@ -1975,27 +2440,31 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
         runCatching {
             val (origin, token) = live()
             syncConversationTimeline(id, forceRows = true)
-            val needControls = synchronized(session) {
-                session.sessionModes.isEmpty() && session.sessionConfig.isEmpty()
-            }
-            if (needControls) {
-                val controls = withContext(Dispatchers.IO) {
-                    api.ensureSessionControls(origin, token, id)
+            viewModelScope.launch {
+                runCatching {
+                    val needControls = synchronized(session) {
+                        session.sessionModes.isEmpty() && session.sessionConfig.isEmpty()
+                    }
+                    if (needControls) {
+                        val controls = withContext(Dispatchers.IO) {
+                            api.ensureSessionControls(origin, token, id)
+                        }
+                        synchronized(session) {
+                            EventFold.applySessionControls(session, controls)
+                        }
+                    }
+                    val skills = withContext(Dispatchers.IO) {
+                        val agId = synchronized(session) { session.agentId }.ifBlank { summary?.agentId.orEmpty() }
+                        val wsId = synchronized(session) { session.workspaceId }.ifBlank { summary?.workspaceId.orEmpty() }
+                        api.listSlashCommands(origin, token, agId, wsId)
+                    }
+                    synchronized(session) {
+                        session.skillCommands.clear()
+                        session.skillCommands += skills
+                    }
+                    publishTimeline(session)
                 }
-                synchronized(session) {
-                    EventFold.applySessionControls(session, controls)
-                }
             }
-            val skills = withContext(Dispatchers.IO) {
-                val agId = synchronized(session) { session.agentId }.ifBlank { summary?.agentId.orEmpty() }
-                val wsId = synchronized(session) { session.workspaceId }.ifBlank { summary?.workspaceId.orEmpty() }
-                api.listSlashCommands(origin, token, agId, wsId)
-            }
-            synchronized(session) {
-                session.skillCommands.clear()
-                session.skillCommands += skills
-            }
-            publishTimeline(session)
         }
     }
 
@@ -2090,23 +2559,9 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                                     kind = AttentionToastKind.Created,
                                 ),
                             )
-                            if (_state.value.route == Route.Conversations) {
-                                userRequestedNewChatLanding = false
-                                openConversation(conv.id)
-                            }
                         }
                     }
                 }
-            }
-
-            if (
-                !hasAutoOpenedInitialConversation &&
-                !userRequestedNewChatLanding &&
-                merged.isNotEmpty() &&
-                _state.value.route == Route.Conversations
-            ) {
-                hasAutoOpenedInitialConversation = true
-                openConversation(merged.first().id)
             }
 
             viewModelScope.launch(Dispatchers.IO) {
@@ -2805,10 +3260,12 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                 accountCodeSent = false,
                 accountCodeResendAtMs = 0L,
                 accountError = null,
-                desktopConnect = if (it.connection == ConnectionState.Online) null else DesktopConnectSheet(),
+                desktopConnect = null,
+                isAutoConnectingInBackground = it.connection != ConnectionState.Online,
+                autoConnectingHostName = null,
             )
         }
-        refreshAccount()
+        refreshAccount(justLoggedIn = true)
         discoverHosts()
     }
 
@@ -2856,9 +3313,17 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(accountLoginRequested = requested) }
     }
 
-    fun refreshAccount() {
+    fun refreshAccount(justLoggedIn: Boolean = false) {
         if (accountRepo.getToken() == null) {
-            _state.update { it.copy(accountSignedIn = false, accountOverview = null, desktopConnect = null) }
+            _state.update {
+                it.copy(
+                    accountSignedIn = false,
+                    accountOverview = null,
+                    desktopConnect = null,
+                    isAutoConnectingInBackground = false,
+                    autoConnectingHostName = null,
+                )
+            }
             return
         }
         viewModelScope.launch {
@@ -2879,7 +3344,7 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                             accountError = null,
                         )
                     }
-                    syncAccountHosts(forcePush = true)
+                    syncAccountHosts(forcePush = true, justLoggedIn = justLoggedIn)
                 }
                 .onFailure { err ->
                     if (err is VibeXAccountException && err.code == "signed_out") {
@@ -2891,16 +3356,20 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                                 accountSavedHosts = emptyList(),
                                 accountLoading = false,
                                 desktopConnect = null,
+                                isAutoConnectingInBackground = false,
+                                autoConnectingHostName = null,
                             )
                         }
                     } else {
                         _state.update {
                             val sheet = it.desktopConnect?.takeIf { s -> s.stage == DesktopConnectStage.Syncing }
-                                ?.copy(stage = DesktopConnectStage.Failed(DESKTOP_SYNC_FAILED, route = null))
+                                ?.copy(stage = DesktopConnectStage.Failed(DESKTOP_SYNC_FAILED, retryTarget = null))
                             it.copy(
                                 accountLoading = false,
                                 accountError = describeAccountError(err),
                                 desktopConnect = sheet ?: it.desktopConnect,
+                                isAutoConnectingInBackground = false,
+                                autoConnectingHostName = null,
                             )
                         }
                     }
@@ -2908,7 +3377,7 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun syncAccountHosts(forcePush: Boolean = false) {
+    fun syncAccountHosts(forcePush: Boolean = false, justLoggedIn: Boolean = false) {
         if (accountRepo.getToken() == null) return
         viewModelScope.launch {
             _state.update { it.copy(accountSyncingHosts = true) }
@@ -2921,20 +3390,55 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
             } else {
                 remoteSaved
             }
+            var autoConnectDesktop: AccountDesktop? = null
             _state.update { current ->
                 val listed = desktops.getOrDefault(current.accountDesktops)
-                val sheet = current.desktopConnect?.takeIf { it.stage == DesktopConnectStage.Syncing }?.let {
-                    if (desktops.isSuccess) {
-                        it.copy(stage = DesktopConnectStage.Choosing, selectedHostId = listed.firstOrNull()?.hostId)
-                    } else {
-                        it.copy(stage = DesktopConnectStage.Failed(DESKTOP_SYNC_FAILED, route = null))
+                val shouldAutoConnectSingle = listed.size == 1 &&
+                    current.connection != ConnectionState.Online &&
+                    current.desktopConnect == null &&
+                    (justLoggedIn || (!didAttemptInitialAccountAutoConnect && current.profiles.isEmpty() && current.autoConnect))
+                if (shouldAutoConnectSingle) {
+                    didAttemptInitialAccountAutoConnect = true
+                    autoConnectDesktop = listed.single()
+                }
+                val sheet = when {
+                    current.desktopConnect?.stage == DesktopConnectStage.Syncing -> {
+                        if (desktops.isSuccess) {
+                            current.desktopConnect.copy(
+                                stage = DesktopConnectStage.Choosing,
+                                selectedHostId = listed.firstOrNull()?.hostId,
+                            )
+                        } else {
+                            current.desktopConnect.copy(
+                                stage = DesktopConnectStage.Failed(DESKTOP_SYNC_FAILED, retryTarget = null),
+                            )
+                        }
                     }
-                } ?: current.desktopConnect
+                    justLoggedIn && autoConnectDesktop == null && current.connection != ConnectionState.Online -> {
+                        DesktopConnectSheet(
+                            stage = if (desktops.isSuccess) {
+                                DesktopConnectStage.Choosing
+                            } else {
+                                DesktopConnectStage.Failed(DESKTOP_SYNC_FAILED, retryTarget = null)
+                            },
+                            selectedHostId = listed.firstOrNull()?.hostId,
+                        )
+                    }
+                    else -> current.desktopConnect
+                }
                 current.copy(
                     accountDesktops = listed,
                     accountSavedHosts = finalSaved,
                     accountSyncingHosts = false,
                     desktopConnect = sheet,
+                    isAutoConnectingInBackground = if (autoConnectDesktop != null) true else false,
+                    autoConnectingHostName = autoConnectDesktop?.hostName,
+                )
+            }
+            autoConnectDesktop?.let { desktop ->
+                connectDesktopTarget(
+                    target = DesktopConnectTarget.Account(desktop),
+                    silentUntilNeeded = true,
                 )
             }
         }

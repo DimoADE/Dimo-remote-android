@@ -89,6 +89,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -148,7 +149,7 @@ private enum class CollabTab(val title: String) {
 fun CollaborationScreen(
     state: UiState,
     model: CompanionModel,
-    onOpenSidebar: () -> Unit,
+    onActiveChatChanged: (Boolean) -> Unit = {},
 ) {
     val c = VibexTheme.colors
     val scope = rememberCoroutineScope()
@@ -163,6 +164,17 @@ fun CollaborationScreen(
 
     var activeChatItem by remember { mutableStateOf<CollabSidebarItem?>(null) }
     var openedBotConversationId by remember { mutableStateOf<String?>(null) }
+
+    val inNestedChat = activeChatItem != null || openedBotConversationId != null
+    LaunchedEffect(inNestedChat) {
+        onActiveChatChanged(inNestedChat)
+    }
+    DisposableEffect(Unit) {
+        onDispose { onActiveChatChanged(false) }
+    }
+    LaunchedEffect(sidebarItems) {
+        model.updateCollabUnreadCount(sidebarItems.sumOf { it.unreadCount })
+    }
 
     var showAddMenu by remember { mutableStateOf(false) }
     var showProjectMenu by remember { mutableStateOf(false) }
@@ -219,24 +231,27 @@ fun CollaborationScreen(
 
     val filteredItems = remember(sidebarItems, selectedTab, searchText) {
         val q = searchText.trim().lowercase()
-        val basePool = when (selectedTab) {
-            CollabTab.All -> sidebarItems
-            CollabTab.Primary -> {
-                val primary = sidebarItems.filter { item ->
-                    item.isGroup ||
-                        item.member?.isSupervisor == true ||
-                        item.unreadCount > 0 ||
-                        item.lastMessage != null
-                }
-                if (primary.isEmpty()) sidebarItems else primary
-            }
-        }
-        if (q.isEmpty()) {
-            basePool
-        } else {
-            basePool.filter { item ->
+        if (q.isNotEmpty()) {
+            sidebarItems.filter { item ->
+                val agentMatch = item.member?.agent?.let { ag ->
+                    ag.lowercase().contains(q) || agentDisplayName(ag).lowercase().contains(q)
+                } == true
                 item.displayName.lowercase().contains(q) ||
-                    item.lastMessage?.preview?.lowercase()?.contains(q) == true
+                    item.lastMessage?.preview?.lowercase()?.contains(q) == true ||
+                    agentMatch
+            }
+        } else {
+            when (selectedTab) {
+                CollabTab.All -> sidebarItems
+                CollabTab.Primary -> {
+                    val primary = sidebarItems.filter { item ->
+                        item.isGroup ||
+                            item.member?.isSupervisor == true ||
+                            item.unreadCount > 0 ||
+                            item.lastMessage != null
+                    }
+                    if (primary.isEmpty()) sidebarItems else primary
+                }
             }
         }
     }
@@ -256,65 +271,79 @@ fun CollaborationScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .background(c.bg)
-                // The list stays composed under an open chat; keep it out of TalkBack's reach.
                 .then(if (activeChatItem != null) Modifier.clearAndSetSemantics { } else Modifier),
         ) {
-            // Top Header Bar (Sidebar Button + Project Selector | 协作空间 | + Menu) — Strictly Centered Title
+            // Top Header Bar: Plain Project Selector | 协作空间 | + Menu
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 10.dp),
             ) {
-                // Half the bar minus half the centered title, so a long project name truncates instead of running under it.
-                Row(
-                    modifier = Modifier.align(Alignment.CenterStart).fillMaxWidth(0.5f).padding(end = 42.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .fillMaxWidth(0.5f)
+                        .padding(end = 42.dp),
                 ) {
-                    AppSidebarButton(onClick = onOpenSidebar)
-                    Box {
-                        Surface(
-                            onClick = { showProjectMenu = true },
-                            shape = RoundedCornerShape(50),
-                            color = c.bgElevated,
-                            border = BorderStroke(0.5.dp, c.stroke),
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                            ) {
-                                Icon(Icons.Outlined.Folder, contentDescription = null, tint = c.textSecondary, modifier = Modifier.size(13.dp))
-                                Text(
-                                    text = activeProject?.name ?: "项目",
-                                    color = c.textPrimary,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f, fill = false),
-                                )
-                                Icon(Icons.Outlined.UnfoldMore, contentDescription = null, tint = c.textSecondary, modifier = Modifier.size(12.dp))
-                            }
-                        }
-                        DropdownMenu(
-                            expanded = showProjectMenu,
-                            onDismissRequest = { showProjectMenu = false },
-                        ) {
-                            state.catalog?.projects.orEmpty().forEach { project ->
-                                DropdownMenuItem(
-                                    text = { Text(project.name) },
-                                    trailingIcon = {
-                                        if (state.selectedProjectId == project.id) {
-                                            Icon(Icons.Outlined.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-                                        }
-                                    },
-                                    onClick = {
-                                        showProjectMenu = false
-                                        model.selectProjectInPlace(project.id)
-                                    },
-                                )
-                            }
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { showProjectMenu = true }
+                            .padding(horizontal = 4.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                        Icon(
+                            Icons.Outlined.Folder,
+                            contentDescription = null,
+                            tint = c.textSecondary,
+                            modifier = Modifier.size(15.dp),
+                        )
+                        Text(
+                            text = if (state.selectedProjectId == null) "全局" else (activeProject?.name ?: "项目"),
+                            color = c.textPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        Icon(
+                            Icons.Outlined.ExpandMore,
+                            contentDescription = null,
+                            tint = c.textSecondary,
+                            modifier = Modifier.size(15.dp),
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = showProjectMenu,
+                        onDismissRequest = { showProjectMenu = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("全局") },
+                            trailingIcon = {
+                                if (state.selectedProjectId == null) {
+                                    Icon(Icons.Outlined.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                                }
+                            },
+                            onClick = {
+                                showProjectMenu = false
+                                model.selectProjectInPlace(null)
+                            },
+                        )
+                        state.catalog?.projects.orEmpty().forEach { project ->
+                            DropdownMenuItem(
+                                text = { Text(project.name) },
+                                trailingIcon = {
+                                    if (state.selectedProjectId == project.id) {
+                                        Icon(Icons.Outlined.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    }
+                                },
+                                onClick = {
+                                    showProjectMenu = false
+                                    model.selectProjectInPlace(project.id)
+                                },
+                            )
                         }
                     }
                 }
@@ -323,7 +352,7 @@ fun CollaborationScreen(
                     text = "协作空间",
                     color = c.textPrimary,
                     fontSize = 17.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.Bold,
                     modifier = Modifier.align(Alignment.Center),
                     textAlign = TextAlign.Center,
                 )
@@ -332,12 +361,12 @@ fun CollaborationScreen(
                     Surface(
                         onClick = { showAddMenu = true },
                         shape = CircleShape,
-                        color = c.bgElevated,
-                        border = BorderStroke(0.5.dp, c.stroke),
-                        modifier = Modifier.size(32.dp),
+                        color = c.card,
+                        border = BorderStroke(0.6.dp, c.stroke),
+                        modifier = Modifier.size(34.dp),
                     ) {
                         Box(contentAlignment = Alignment.Center) {
-                            Icon(Icons.Outlined.Add, contentDescription = "新建", tint = c.textPrimary, modifier = Modifier.size(17.dp))
+                            Icon(Icons.Outlined.Add, contentDescription = "新建", tint = c.textPrimary, modifier = Modifier.size(18.dp))
                         }
                     }
                     DropdownMenu(
@@ -383,77 +412,63 @@ fun CollaborationScreen(
                 }
             }
 
-            // Centered Segmented Switcher (主要 | 全部) + Search Bar
+            // Unified Search Bar + Filter Row (主要 | 全部 + count)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp)
                     .padding(bottom = 10.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Row(
-                    modifier = Modifier
-                        .width(196.dp)
-                        .clip(RoundedCornerShape(9.dp))
-                        .background(c.segmentedTrack)
-                        .padding(3.dp),
-                ) {
-                    CollabTab.entries.forEach { tab ->
-                        val selected = selectedTab == tab
-                        Text(
-                            text = tab.title,
-                            color = if (selected) c.textPrimary else c.textSecondary,
-                            fontSize = 13.sp,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier
-                                .weight(1f)
-                                .then(
-                                    if (selected) Modifier.shadow(1.5.dp, RoundedCornerShape(7.dp), ambientColor = Color.Black.copy(alpha = 0.08f))
-                                    else Modifier,
-                                )
-                                .clip(RoundedCornerShape(7.dp))
-                                .background(if (selected) c.segmentedThumb else Color.Transparent)
-                                .clickable { selectedTab = tab }
-                                .padding(vertical = 6.dp),
-                        )
-                    }
-                }
+                UnifiedSearchBar(
+                    query = searchText,
+                    onQueryChange = { searchText = it },
+                    placeholder = "搜索群组或助手…",
+                )
 
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(c.bgElevated)
-                        .padding(horizontal = 12.dp, vertical = 9.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Icon(Icons.Outlined.Search, contentDescription = null, tint = c.textSecondary, modifier = Modifier.size(15.dp))
-                    Box(modifier = Modifier.weight(1f)) {
-                        if (searchText.isEmpty()) {
-                            Text("搜索群组或助手…", color = c.textSecondary, fontSize = 14.sp)
+                    Row(
+                        modifier = Modifier
+                            .width(148.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(c.segmentedTrack)
+                            .padding(2.dp),
+                    ) {
+                        CollabTab.entries.forEach { tab ->
+                            val selected = selectedTab == tab
+                            Text(
+                                text = tab.title,
+                                color = if (selected) c.textPrimary else c.textSecondary,
+                                fontSize = 12.5.sp,
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .then(
+                                        if (selected) Modifier.shadow(1.5.dp, RoundedCornerShape(6.dp), ambientColor = Color.Black.copy(alpha = 0.08f))
+                                        else Modifier,
+                                    )
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (selected) c.segmentedThumb else Color.Transparent)
+                                    .clickable { selectedTab = tab }
+                                    .padding(vertical = 5.dp),
+                            )
                         }
-                        BasicTextField(
-                            value = searchText,
-                            onValueChange = { searchText = it },
-                            singleLine = true,
-                            textStyle = TextStyle(color = c.textPrimary, fontSize = 14.sp),
-                            cursorBrush = SolidColor(c.accent),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
                     }
-                    if (searchText.isNotEmpty()) {
-                        Icon(
-                            Icons.Outlined.Close,
-                            contentDescription = "清除",
-                            tint = c.textSecondary,
-                            modifier = Modifier
-                                .size(16.dp)
-                                .clickable { searchText = "" },
-                        )
-                    }
+
+                    Spacer(modifier = Modifier.weight(1f))
+
+                    Text(
+                        text = "${filteredItems.size} 个协作",
+                        style = TextStyle(
+                            fontSize = 12.sp,
+                            fontFeatureSettings = "tnum",
+                            color = c.textSecondary,
+                        ),
+                    )
                 }
             }
 
@@ -461,20 +476,50 @@ fun CollaborationScreen(
             if (loading && sidebarItems.isEmpty()) {
                 CollaborationListSkeletonView(modifier = Modifier.fillMaxSize())
             } else if (filteredItems.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        Icon(Icons.Outlined.Groups, contentDescription = null, tint = c.textSecondary, modifier = Modifier.size(36.dp))
-                        Text("暂无协作空间或助手", color = c.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                        Text("点击右上角 + 创建你的第一个助手或协作群组", color = c.textSecondary, fontSize = 13.sp)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(bottom = BOTTOM_DOCK_CLEARANCE),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (searchText.isNotBlank()) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(Icons.Outlined.Search, contentDescription = null, tint = c.textSecondary, modifier = Modifier.size(32.dp))
+                            Text("没有匹配的群组或助手", color = c.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                text = "清除搜索",
+                                color = c.accent,
+                                fontSize = 13.5.sp,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { searchText = "" }
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                            )
+                        }
+                    } else {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Icon(Icons.Outlined.Groups, contentDescription = null, tint = c.textSecondary, modifier = Modifier.size(36.dp))
+                            Text("暂无协作空间或助手", color = c.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                            Text("点击右上角 + 创建你的第一个助手或协作群组", color = c.textSecondary, fontSize = 13.sp)
+                        }
                     }
                 }
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 32.dp),
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        end = 16.dp,
+                        top = 4.dp,
+                        bottom = BOTTOM_DOCK_CLEARANCE + 18.dp,
+                    ),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     // Supervisor Slot
@@ -542,8 +587,8 @@ fun CollaborationScreen(
                             val groupEntries = filteredItems.filter { item ->
                                 item.id != supervisorItem?.id && item.groupId == group.groupId
                             }
-                            if (groupEntries.isNotEmpty() || searchText.isEmpty()) {
-                                val isCollapsed = collapsedGroupIds.contains(group.groupId)
+                            if (groupEntries.isNotEmpty() || searchText.isBlank()) {
+                                val isCollapsed = searchText.isBlank() && collapsedGroupIds.contains(group.groupId)
                                 var showGroupMenu by remember { mutableStateOf(false) }
 
                                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1971,20 +2016,34 @@ private fun CollaborationChatView(
                 }
             }
 
-            // Input Row
+            // Floating Capsule Input Row
+            val composerShape = RoundedCornerShape(26.dp)
+            val canSend = inputText.trim().isNotEmpty() && !sending
             Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .shadow(
+                        elevation = if (c.isDark) 8.dp else 4.dp,
+                        shape = composerShape,
+                        ambientColor = Color.Black.copy(alpha = if (c.isDark) 0.22f else 0.05f),
+                        spotColor = Color.Black.copy(alpha = if (c.isDark) 0.28f else 0.08f),
+                    )
+                    .clip(composerShape)
+                    .background(c.card)
+                    .border(0.75.dp, c.stroke, composerShape)
+                    .padding(start = 10.dp, end = 7.dp, top = 6.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 if (item.isGroup) {
-                    Box {
+                    Box(modifier = Modifier.padding(bottom = 2.dp)) {
                         Surface(
                             onClick = { showDelayMenu = true },
                             shape = RoundedCornerShape(50),
-                            color = if (delaySeconds > 0) Color(0xFFF97316).copy(alpha = 0.14f) else c.bgElevated,
+                            color = if (delaySeconds > 0) Color(0xFFF97316).copy(alpha = 0.14f) else c.textPrimary.copy(alpha = 0.06f),
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 9.dp),
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(3.dp),
                             ) {
@@ -1997,9 +2056,12 @@ private fun CollaborationChatView(
                                 if (delaySeconds > 0) {
                                     Text(
                                         text = "${delaySeconds}s",
-                                        color = Color(0xFFF97316),
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
+                                        style = TextStyle(
+                                            color = Color(0xFFF97316),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFeatureSettings = "tnum",
+                                        ),
                                     )
                                 }
                             }
@@ -2035,41 +2097,37 @@ private fun CollaborationChatView(
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(c.bgElevated)
-                        .border(0.5.dp, c.stroke, RoundedCornerShape(18.dp))
-                        .padding(horizontal = 12.dp, vertical = 9.dp),
+                        .padding(horizontal = 4.dp, vertical = 8.dp),
                 ) {
                     if (inputText.isEmpty()) {
                         Text(
                             text = if (item.isGroup) "发送消息到 ${item.displayName}…" else "发送消息给 ${item.displayName}…",
-                            color = c.textSecondary,
-                            fontSize = 14.sp,
+                            color = c.textTertiary,
+                            fontSize = 15.sp,
                         )
                     }
                     BasicTextField(
                         value = inputText,
                         onValueChange = { inputText = it },
-                        textStyle = TextStyle(color = c.textPrimary, fontSize = 14.sp),
+                        textStyle = TextStyle(color = c.textPrimary, fontSize = 15.sp, lineHeight = 20.sp),
                         cursorBrush = SolidColor(c.accent),
-                        maxLines = 4,
+                        maxLines = 5,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
 
-                val canSend = inputText.trim().isNotEmpty() && !sending
-                IconButton(
-                    onClick = ::sendMessage,
-                    enabled = canSend,
+                Box(
                     modifier = Modifier
-                        .size(34.dp)
+                        .size(36.dp)
                         .clip(CircleShape)
-                        .background(if (canSend) Color(0xFF2563EB) else c.textSecondary.copy(alpha = 0.25f)),
+                        .background(if (canSend) c.textPrimary else c.textPrimary.copy(alpha = if (c.isDark) 0.16f else 0.11f))
+                        .clickable(enabled = canSend, onClick = ::sendMessage),
+                    contentAlignment = Alignment.Center,
                 ) {
                     Icon(
                         Icons.Outlined.ArrowUpward,
                         contentDescription = "发送",
-                        tint = Color.White,
+                        tint = if (canSend) c.bg else c.textTertiary,
                         modifier = Modifier.size(18.dp),
                     )
                 }

@@ -82,6 +82,27 @@ class PairingClientTest {
     }
 
     @Test
+    fun requestConnectReturnsImmediateCredentialWhenSameAccountAutoApproved() {
+        val transport = ScriptedTransport(
+            listOf(
+                HttpExchange(
+                    201,
+                    """{"request_id":"req-auto","host_id":"host-1","host_name":"Mac Studio","sas_code":"7392","status":"approved","expires_at":"2026-11-14T12:05:00Z","credential":{"device_id":"22222222-2222-2222-2222-222222222222","access_token":"instant-device-token","scopes":["conversation.read","conversation.write"]}}""",
+                ),
+            ),
+        )
+        val result = PairingClient(transport).requestConnect(
+            HostOrigin.parse("http://192.168.1.5:17891"),
+            deviceName = "Pixel 9",
+            accountToken = "same-account-jwt",
+        )
+        assertEquals("approved", result.status)
+        assertEquals("7392", result.sasCode)
+        assertEquals("Mac Studio", result.hostName)
+        assertEquals("instant-device-token", result.credential?.access_token)
+    }
+
+    @Test
     fun redeemStoresCompanionCredentialAndNegotiatesV1() {
         val transport = ScriptedTransport(
             listOf(

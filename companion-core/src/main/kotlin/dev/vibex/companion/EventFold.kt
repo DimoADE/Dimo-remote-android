@@ -314,7 +314,33 @@ object EventFold {
 
         val prevTxUserCount = session.rows.count { it.id.startsWith("tx:user:") }
         val newTxUserCount = transcriptRows.count { it.kind == "user" }
-        val preservedTailUser = if (newTxUserCount <= prevTxUserCount) {
+        val optimisticText = session.optimisticUserText
+        if (optimisticText != null) {
+            val serverMatchedOptimistic = newTxUserCount > session.optimisticBaselineUserCount ||
+                (prevTxUserCount == 0 && transcriptRows.lastOrNull { it.kind == "user" }?.body?.trim() == optimisticText)
+            if (serverMatchedOptimistic) {
+                session.optimisticUserText = null
+                val lastUserRowIdx = transcriptRows.indexOfLast { it.kind == "user" }
+                val hasReplyAfterLastUser = lastUserRowIdx >= 0 && lastUserRowIdx < transcriptRows.lastIndex
+                if (hasReplyAfterLastUser || session.inFlightTurnId != null) {
+                    session.optimisticThinkingUntilMs = 0L
+                }
+            }
+        }
+        val preservedTailUser = if (session.optimisticUserText != null) {
+            val existingLocal = session.rows.filter { it.id.startsWith("local:") && it.kind == "user" }
+            existingLocal.ifEmpty {
+                listOf(
+                    TimelineRow(
+                        id = "local:preserved",
+                        kind = "user",
+                        title = "",
+                        body = session.optimisticUserText!!,
+                        tone = TimelineTone.Quiet,
+                    ),
+                )
+            }
+        } else if (newTxUserCount <= prevTxUserCount) {
             val lastTxIdx = session.rows.indexOfLast { it.id.startsWith("tx:") }
             session.rows.drop(if (lastTxIdx >= 0) lastTxIdx + 1 else 0)
                 .filter { !it.id.startsWith("tx:") && it.kind == "user" }
@@ -426,10 +452,12 @@ object EventFold {
             "user_turn_created" -> {
                 val turnId = payload.fields("turn_id", "turnId").ifBlank { "turn:${event.sequence}" }
                 session.inFlightTurnId = turnId
+                session.optimisticUserText = null
+                session.optimisticThinkingUntilMs = 0L
                 session.notices.removeAll { it.id.startsWith("end:") }
                 session.rows.removeAll { it.id.startsWith("end:") }
                 val body = userText(payload)
-                session.rows.removeAll { it.id.startsWith("local:") && it.body == body }
+                session.rows.removeAll { it.id.startsWith("local:") }
                 val lastUserIdx = session.rows.indexOfLast { it.kind == "user" }
                 val lastAsstIdx = session.rows.indexOfLast { it.kind == "assistant" }
                 val alreadyInTranscriptTail = lastUserIdx >= 0 &&
@@ -453,6 +481,7 @@ object EventFold {
             "user_turn_queued" -> Unit
             "user_turn_started" -> {
                 session.inFlightTurnId = payload.fields("turn_id", "turnId").ifBlank { "running" }
+                session.optimisticThinkingUntilMs = 0L
                 session.rows.removeAll { it.id.startsWith("queued-turn:") }
             }
             "assistant_text_delta" -> appendAssistant(session, payload, body = payload.textOrEmpty("text"))
@@ -657,6 +686,7 @@ object EventFold {
             }
             "turn_completed" -> {
                 session.inFlightTurnId = null
+                session.optimisticThinkingUntilMs = 0L
                 session.permissionPrompt = null
                 session.pendingQuestion = null
                 session.notices.removeAll { it.id.startsWith("end:") }
@@ -934,6 +964,7 @@ object EventFold {
         body: String = "",
     ) {
         session.inFlightTurnId = null
+        session.optimisticThinkingUntilMs = 0L
         session.permissionPrompt = null
         session.pendingQuestion = null
         val severity = if (tone == TimelineTone.Stop) NoticeSeverity.Error else NoticeSeverity.Info
@@ -1031,7 +1062,8 @@ object EventFold {
             is JsonValue.Bool -> SessionConfigChoice(item.value.toString(), if (item.value) "On" else "Off")
             is JsonValue.Object -> {
                 val value = scalarText(item, "value", "id").ifBlank { return null }
-                SessionConfigChoice(value, item.textAny("label", "name").ifBlank { value })
+                val desc = item.textOrNull("description")?.takeIf { it.isNotBlank() }
+                SessionConfigChoice(value, item.textAny("label", "name").ifBlank { value }, desc)
             }
             else -> null
         }
