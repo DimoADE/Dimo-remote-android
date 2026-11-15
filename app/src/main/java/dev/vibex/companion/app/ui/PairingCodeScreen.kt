@@ -25,13 +25,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.rounded.Cancel
+import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Warning
+import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,9 +48,11 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.vibex.companion.app.CompanionModel
+import dev.vibex.companion.app.LanSasInlineState
 import dev.vibex.companion.app.UiState
 import dev.vibex.companion.app.ui.theme.PlexMono
 import dev.vibex.companion.app.ui.theme.VibexTheme
@@ -64,6 +70,14 @@ fun PairingCodeScreen(
     val trimmedCode = code.trim()
     val isInvitation = trimmedCode.startsWith("vibex-pairing:") || trimmedCode.startsWith("{")
     val canSubmit = !state.pairing && trimmedCode.isNotEmpty()
+    val lanHosts = remember(state.discoveredHosts) { state.discoveredHosts.filter { !it.isCloudService } }
+
+    LaunchedEffect(Unit) {
+        model.discoverHosts()
+    }
+    DisposableEffect(Unit) {
+        onDispose { model.cancelLanHostInline() }
+    }
 
     val submit = {
         if (canSubmit) {
@@ -95,10 +109,13 @@ fun PairingCodeScreen(
                 color = colors.accent,
                 modifier = Modifier
                     .align(Alignment.CenterStart)
-                    .clickable(enabled = !state.pairing, onClick = onDismiss),
+                    .clickable(enabled = !state.pairing) {
+                        model.cancelLanHostInline()
+                        onDismiss()
+                    },
             )
             Text(
-                "配对电脑",
+                "连接电脑",
                 fontSize = 17.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = colors.textPrimary,
@@ -108,13 +125,13 @@ fun PairingCodeScreen(
             Box(Modifier.align(Alignment.CenterEnd)) {
                 if (state.pairing) {
                     CircularProgressIndicator(Modifier.size(18.dp), color = colors.accent, strokeWidth = 2.dp)
-                } else {
+                } else if (canSubmit) {
                     Text(
-                        "配对",
+                        "连接",
                         fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = if (canSubmit) colors.accent else colors.textTertiary,
-                        modifier = Modifier.clickable(enabled = canSubmit, onClick = submit),
+                        color = colors.accent,
+                        modifier = Modifier.clickable(onClick = submit),
                     )
                 }
             }
@@ -128,33 +145,162 @@ fun PairingCodeScreen(
                 .padding(horizontal = 16.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            val inlineSas = state.lanSasState
+            if (inlineSas != null) {
+                val shape = RoundedCornerShape(14.dp)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(shape)
+                        .background(colors.card)
+                        .border(0.75.dp, colors.accent.copy(alpha = 0.40f), shape)
+                        .padding(horizontal = 16.dp, vertical = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    when (inlineSas) {
+                        is LanSasInlineState.Connecting -> {
+                            LoadingState("正在请求连接 ${inlineSas.host.displayName}…")
+                            Text(
+                                text = "取消",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = colors.textSecondary,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { model.cancelLanHostInline() }
+                                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                            )
+                        }
+                        is LanSasInlineState.AwaitingApproval -> {
+                            Text(
+                                text = "请在电脑「${inlineSas.hostName}」上核对连接码并点击允许",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = colors.textPrimary,
+                                textAlign = TextAlign.Center,
+                            )
+                            Text(
+                                text = inlineSas.sasCode,
+                                style = TextStyle(
+                                    fontSize = 30.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = PlexMono,
+                                    fontFeatureSettings = "tnum",
+                                    letterSpacing = 3.sp,
+                                    color = colors.accent,
+                                ),
+                            )
+                            Text(
+                                text = "核对一致后，在电脑端点击「允许连接」即可接入",
+                                fontSize = 12.sp,
+                                color = colors.textSecondary,
+                                textAlign = TextAlign.Center,
+                            )
+                            Text(
+                                text = "取消等待",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = colors.danger,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { model.cancelLanHostInline() }
+                                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                            )
+                        }
+                    }
+                }
+            } else if (lanHosts.isNotEmpty()) {
+                val shape = RoundedCornerShape(14.dp)
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.padding(horizontal = 4.dp),
+                    ) {
+                        Icon(Icons.Rounded.Wifi, null, tint = colors.pass, modifier = Modifier.size(14.dp))
+                        Text(
+                            text = "当前 Wi-Fi 发现电脑（免输码，对比连接码即连）",
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.textSecondary,
+                        )
+                    }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(shape)
+                            .background(colors.card)
+                            .border(0.75.dp, colors.stroke, shape),
+                    ) {
+                        lanHosts.forEachIndexed { idx, host ->
+                            if (idx > 0) {
+                                HorizontalDivider(color = colors.hairline, modifier = Modifier.padding(start = 48.dp))
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = !state.pairing) { model.connectLanHostInline(host) }
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                Icon(Icons.Rounded.Computer, null, tint = colors.accent, modifier = Modifier.size(20.dp))
+                                Text(
+                                    text = host.displayName,
+                                    fontSize = 14.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colors.textPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Text(
+                                    text = "点击连接",
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colors.accent,
+                                    modifier = Modifier
+                                        .clip(CircleShape)
+                                        .background(colors.accent.copy(alpha = 0.14f))
+                                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(14.dp))
                     .background(colors.card)
-                    .border(0.75.dp, colors.stroke, RoundedCornerShape(12.dp)),
+                    .border(0.75.dp, colors.stroke, RoundedCornerShape(14.dp)),
             ) {
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .clickable(enabled = !state.pairing, onClick = onScan)
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                        .padding(horizontal = 14.dp, vertical = 13.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Box(
                         Modifier
-                            .size(38.dp)
+                            .size(40.dp)
                             .clip(RoundedCornerShape(10.dp))
                             .background(colors.accent.copy(0.14f)),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Icon(Icons.Outlined.QrCodeScanner, null, tint = colors.accent, modifier = Modifier.size(20.dp))
+                        Icon(Icons.Outlined.QrCodeScanner, null, tint = colors.accent, modifier = Modifier.size(21.dp))
                     }
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("扫码配对", fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = colors.textPrimary)
-                        Text("扫描桌面端二维码自动配对", fontSize = 12.sp, color = colors.textSecondary)
+                        Text("扫码连接", fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = colors.textPrimary)
+                        Text("扫描桌面端二维码自动配对连接", fontSize = 12.sp, color = colors.textSecondary)
                     }
                     Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = colors.textTertiary, modifier = Modifier.size(18.dp))
                 }
@@ -183,6 +329,7 @@ fun PairingCodeScreen(
                                 color = colors.textPrimary,
                                 fontSize = 14.sp,
                                 fontFamily = PlexMono,
+                                fontFeatureSettings = "tnum",
                             ),
                             cursorBrush = SolidColor(colors.accent),
                             modifier = Modifier.fillMaxWidth(),
@@ -197,26 +344,38 @@ fun PairingCodeScreen(
                                 .size(18.dp)
                                 .clickable { code = "" },
                         )
-                    }
-                    Row(
-                        Modifier
-                            .clip(CircleShape)
-                            .background(colors.accent.copy(0.14f))
-                            .clickable {
-                                val pasted = clipboard.getText()?.text.orEmpty().trim()
-                                if (pasted.isNotEmpty()) {
-                                    code = pasted
-                                    if (pasted.startsWith("vibex-pairing:") || pasted.startsWith("{")) {
-                                        model.pairFromRaw(pasted)
+                        Text(
+                            text = "连接",
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.onAccent,
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .background(colors.accent)
+                                .clickable(enabled = canSubmit, onClick = submit)
+                                .padding(horizontal = 11.dp, vertical = 5.dp),
+                        )
+                    } else {
+                        Row(
+                            Modifier
+                                .clip(CircleShape)
+                                .background(colors.accent.copy(0.14f))
+                                .clickable {
+                                    val pasted = clipboard.getText()?.text.orEmpty().trim()
+                                    if (pasted.isNotEmpty()) {
+                                        code = pasted
+                                        if (pasted.startsWith("vibex-pairing:") || pasted.startsWith("{")) {
+                                            model.pairFromRaw(pasted)
+                                        }
                                     }
                                 }
-                            }
-                            .padding(horizontal = 10.dp, vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Icon(Icons.Rounded.ContentPaste, null, tint = colors.accent, modifier = Modifier.size(13.dp))
-                        Text("粘贴", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.accent)
+                                .padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(Icons.Rounded.ContentPaste, null, tint = colors.accent, modifier = Modifier.size(13.dp))
+                            Text("粘贴", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.accent)
+                        }
                     }
                 }
             }

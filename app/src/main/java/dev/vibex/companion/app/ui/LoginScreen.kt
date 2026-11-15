@@ -106,6 +106,12 @@ fun LoginScreen(state: UiState, model: CompanionModel, onPairWithCode: () -> Uni
         Modifier
             .fillMaxSize()
             .background(colors.bg)
+            .clickable(
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = null,
+            ) {
+                focusManager.clearFocus()
+            }
             .statusBarsPadding()
             .navigationBarsPadding()
             .imePadding()

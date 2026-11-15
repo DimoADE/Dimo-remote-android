@@ -59,7 +59,20 @@ data class DiscoveredLanHost(
     val origin: String,
     val hostId: String?,
     val name: String,
-)
+) {
+    val id: String
+        get() = hostId ?: origin
+
+    val isCloudService: Boolean
+        get() = origin.contains("/t/") || origin.contains("vibex.xforever.xin")
+
+    val displayName: String
+        get() {
+            val trimmed = name.trim()
+            if (trimmed.isNotEmpty() && !trimmed.startsWith("http")) return trimmed
+            return origin.removePrefix("http://").removePrefix("https://")
+        }
+}
 
 data class DeviceConnectRequestResult(
     val requestId: String,
@@ -528,8 +541,8 @@ class UrlConnectionTransport : HttpTransport {
         }
 
         val connection = URI(url).toURL().openConnection() as HttpURLConnection
-        connection.connectTimeout = if (isPrivateLan) 2_200 else 10_000
-        connection.readTimeout = if (isPrivateLan) 4_000 else 20_000
+        connection.connectTimeout = if (isPrivateLan) 2_500 else 10_000
+        connection.readTimeout = if (isPrivateLan) 15_000 else 20_000
         connection.requestMethod = method
         connection.doInput = true
         val mutableHeaders = LinkedHashMap(headers)

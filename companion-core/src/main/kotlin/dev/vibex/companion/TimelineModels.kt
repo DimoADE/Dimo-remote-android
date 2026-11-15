@@ -672,6 +672,7 @@ data class SessionNotice(
 data class SessionConfigChoice(
     val value: String,
     val label: String,
+    val description: String? = null,
 )
 
 data class SessionConfigOption(
@@ -700,6 +701,7 @@ data class ConversationView(
     val pendingQuestion: PendingQuestion? = null,
     val queued: List<QueuedInput>,
     val inFlightTurnId: String?,
+    val isThinkingOrRunning: Boolean = inFlightTurnId != null,
     val canSteer: Boolean,
     val lastSequence: Long,
     val usageLabel: String?,
@@ -722,6 +724,9 @@ class TimelineSession {
     var workspaceId: String = ""
     var lastSequence: Long = 0
     var inFlightTurnId: String? = null
+    var optimisticUserText: String? = null
+    var optimisticBaselineUserCount: Int = 0
+    var optimisticThinkingUntilMs: Long = 0L
     var canSteer: Boolean = false
     var usageLabel: String? = null
     var fileChangeLabel: String? = null
@@ -742,8 +747,32 @@ class TimelineSession {
     val availableCommands: MutableList<ComposerToken> = mutableListOf()
     val skillCommands: MutableList<ComposerToken> = mutableListOf()
 
-    fun snapshot(): ConversationView {
+    fun beginOptimisticSend(text: String, nowMs: Long = System.currentTimeMillis()) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        optimisticUserText = trimmed
+        optimisticBaselineUserCount = rows.count { it.kind == "user" && it.id.startsWith("tx:user:") }
+        optimisticThinkingUntilMs = nowMs + 15_000L
+        notices.removeAll { it.id.startsWith("end:") }
+        rows.removeAll { it.id.startsWith("end:") || it.id.startsWith("local:") }
+        rows += TimelineRow(
+            id = "local:$nowMs",
+            kind = "user",
+            title = "",
+            body = text,
+            tone = TimelineTone.Quiet,
+        )
+    }
+
+    fun clearOptimisticSend() {
+        optimisticUserText = null
+        optimisticThinkingUntilMs = 0L
+        rows.removeAll { it.id.startsWith("local:") }
+    }
+
+    fun snapshot(nowMs: Long = System.currentTimeMillis()): ConversationView {
         val builtItems = TimelineBuilder.buildItems(this)
+        val thinkingOrRunning = inFlightTurnId != null || optimisticThinkingUntilMs > nowMs
         return ConversationView(
             conversationId = conversationId,
             title = title.ifBlank { "会话" },
@@ -757,6 +786,7 @@ class TimelineSession {
             pendingQuestion = pendingQuestion,
             queued = queued.toList(),
             inFlightTurnId = inFlightTurnId,
+            isThinkingOrRunning = thinkingOrRunning,
             canSteer = canSteer,
             lastSequence = lastSequence,
             usageLabel = usageLabel,

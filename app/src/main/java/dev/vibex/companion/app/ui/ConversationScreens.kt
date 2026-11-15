@@ -1,78 +1,58 @@
 package dev.vibex.companion.app.ui
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.AccountTree
-import androidx.compose.material.icons.rounded.ArrowUpward
-import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.Cancel
+import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.ChatBubbleOutline
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.Code
-import androidx.compose.material.icons.rounded.Description
-import androidx.compose.material.icons.rounded.EditNote
-import androidx.compose.material.icons.rounded.ExpandLess
-import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Folder
-import androidx.compose.material.icons.rounded.GridView
-import androidx.compose.material.icons.rounded.Groups
-import androidx.compose.material.icons.rounded.Menu
-import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.UnfoldMore
+import androidx.compose.material.icons.rounded.Forum
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.Layers
+import androidx.compose.material.icons.rounded.PushPin
+import androidx.compose.material.icons.rounded.RadioButtonUnchecked
+import androidx.compose.material.icons.rounded.Verified
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -80,849 +60,1213 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex
 import dev.vibex.companion.ConnectionState
-import dev.vibex.companion.ConversationSummary
-import dev.vibex.companion.SessionConfigChoice
-import dev.vibex.companion.SessionConfigOption
-import dev.vibex.companion.SessionMode
-import dev.vibex.companion.WorkspaceEntry
-import dev.vibex.companion.agentDisplayName
+import dev.vibex.companion.KanbanSessionStatus
+import dev.vibex.companion.KanbanSessionSummary
 import dev.vibex.companion.app.CompanionModel
-import dev.vibex.companion.app.Route
 import dev.vibex.companion.app.UiState
-import dev.vibex.companion.app.ui.theme.PlexMono
 import dev.vibex.companion.app.ui.theme.VibexTheme
-import java.time.Duration
+import dev.vibex.companion.isRecentlyActiveReadSession
+import dev.vibex.companion.parseHostTimestampEpochMillis
+import dev.vibex.companion.updatedEpochMs
 import java.time.Instant
-import java.time.OffsetDateTime
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
-private data class StarterChip(val id: String, val label: String, val prompt: String)
+private enum class SessionListOrganization(val label: String) {
+    StatusGrouped("状态分组"),
+    WorkspaceGrouped("工作区视图"),
+}
 
-private val starterSuggestions = listOf(
-    StarterChip("arch", "梳理项目架构", "梳理当前项目的整体架构、目录结构与核心模块职责"),
-    StarterChip("bug", "排查近期改动", "检查当前工作区最近的代码改动，排查潜在问题并给出修复方案"),
-    StarterChip("test", "补充单元测试", "为当前工作区最近修改的核心逻辑补充单元测试并运行验证"),
-)
+private val StatusOrange = Color(0xFFFF9500)
+private val StatusPurple = Color(0xFFAF52DE)
+private val StatusTeal = Color(0xFF30B0C7)
+private val StatusBlue = Color(0xFF007AFF)
+private val StatusGreen = Color(0xFF34C759)
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+/**
+ * 1:1 port of iOS `ConversationsView` Level-1 Session Hub (`ConversationsView.swift`).
+ * Features project filter menu, `UnifiedSearchBar`, `状态分组 / 工作区视图` toggle,
+ * 5 status groups (`进行中`, `待检查`, `近期对话` 24h window, `待开始`, collapsible `已完成历史会话`),
+ * and full long-press session management actions.
+ */
 @Composable
 fun ConversationList(
     state: UiState,
     model: CompanionModel,
-    onChromeHiddenChange: (Boolean) -> Unit = {},
 ) {
     val colors = VibexTheme.colors
-    val focusManager = LocalFocusManager.current
-    var isSidebarOpen by remember { mutableStateOf(false) }
-    var sidebarTab by remember { mutableStateOf("conversations") }
-    var sidebarSearch by remember { mutableStateOf("") }
-    var draft by remember { mutableStateOf("") }
-    var selectedAgentId by remember { mutableStateOf<String?>(null) }
-    var composerMenu by remember { mutableStateOf<ComposerMenu?>(null) }
-    var isComposerFocused by remember { mutableStateOf(false) }
-    val shouldHideBottomChrome = isSidebarOpen || composerMenu != null || isComposerFocused
-    LaunchedEffect(shouldHideBottomChrome) {
-        onChromeHiddenChange(shouldHideBottomChrome)
-        if (isSidebarOpen) {
-            composerMenu = null
-            focusManager.clearFocus()
-        }
-    }
-    BackHandler(enabled = isSidebarOpen || composerMenu != null) {
-        if (isSidebarOpen) {
-            isSidebarOpen = false
-        } else {
-            composerMenu = null
-        }
-    }
-    var landingModeId by remember { mutableStateOf("auto") }
-    var landingEffortValue by remember { mutableStateOf("medium") }
-    var selectedModelByAgent by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
-    var customRelayModels by remember { mutableStateOf<List<String>>(emptyList()) }
-    var showProjectSheet by remember { mutableStateOf(false) }
-    var showDiffSheet by remember { mutableStateOf(false) }
-    var showFileBrowserSheet by remember { mutableStateOf(false) }
-    var menuId by remember { mutableStateOf<String?>(null) }
-    var menuAnchor by remember { mutableStateOf(Offset.Zero) }
-    var expandedProjects by remember { mutableStateOf(setOf<String>()) }
-    var workspaceEntries by remember { mutableStateOf<Map<String, List<WorkspaceEntry>>>(emptyMap()) }
+    val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+
+    var organization by remember { mutableStateOf(SessionListOrganization.StatusGrouped) }
+    var searchQuery by remember { mutableStateOf("") }
+    var isCompletedShelfExpanded by remember { mutableStateOf(false) }
+    var kanbanSessions by remember { mutableStateOf<List<KanbanSessionSummary>>(emptyList()) }
+    var initialLoading by remember { mutableStateOf(true) }
+    var refreshing by remember { mutableStateOf(false) }
+    var removedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var projectMenuExpanded by remember { mutableStateOf(false) }
+
+    var contextTarget by remember { mutableStateOf<KanbanSessionSummary?>(null) }
+    var contextAnchor by remember { mutableStateOf(Offset.Zero) }
+    var renamingSession by remember { mutableStateOf<KanbanSessionSummary?>(null) }
+    var renameDraft by remember { mutableStateOf("") }
+    var deletingSession by remember { mutableStateOf<KanbanSessionSummary?>(null) }
 
     val projects = state.catalog?.projects.orEmpty()
     val workspaces = state.catalog?.workspaces.orEmpty()
-    val agents = state.catalog?.agents.orEmpty().let { list ->
-        list.filter { it.usable }.ifEmpty { list }
+    val selectedFilterProject = remember(projects, state.selectedProjectId) {
+        val pid = state.selectedProjectId ?: return@remember null
+        projects.find { it.id.equals(pid, ignoreCase = true) }
     }
-    val currentProject = projects.find { it.id == state.selectedProjectId } ?: projects.firstOrNull()
-    val currentWorkspace = workspaces.firstOrNull { it.projectId == currentProject?.id } ?: workspaces.firstOrNull()
-    val currentAgent = agents.find { it.id == selectedAgentId }
-        ?: agents.find { it.id == state.conversations.firstOrNull()?.agentId }
-        ?: agents.firstOrNull()
 
-    LaunchedEffect(projects.size, state.selectedProjectId) {
-        if (state.selectedProjectId == null && projects.isNotEmpty()) {
-            model.selectProject(projects.first().id)
+    suspend fun reloadKanban(silent: Boolean = false) {
+        if (!silent && kanbanSessions.isEmpty()) {
+            initialLoading = true
         }
+        runCatching {
+            model.fetchKanbanSessions(state.selectedProjectId)
+        }.onSuccess { fetched ->
+            kanbanSessions = fetched
+        }
+        initialLoading = false
+    }
+
+    LaunchedEffect(state.selectedProjectId, state.connection, state.conversations.size) {
+        if (state.connection == ConnectionState.Online) {
+            reloadKanban(silent = kanbanSessions.isNotEmpty())
+        } else {
+            initialLoading = false
+        }
+    }
+
+    LaunchedEffect(state.selectedProjectId, state.connection) {
+        while (isActive) {
+            val hasRunning = kanbanSessions.any { it.isRunning || it.status == KanbanSessionStatus.InProgress } ||
+                state.conversations.any { it.status.equals("inprogress", ignoreCase = true) || it.status.equals("running", ignoreCase = true) }
+            delay(if (hasRunning) 3_500L else 12_000L)
+            if (state.connection == ConnectionState.Online) {
+                reloadKanban(silent = true)
+            }
+        }
+    }
+
+    fun projectNameForWorkspace(workspaceId: String): String? {
+        val ws = workspaces.find { it.id == workspaceId } ?: return null
+        return projects.find { it.id.equals(ws.projectId, ignoreCase = true) }?.name
+    }
+
+    val mergedSessions = remember(
+        kanbanSessions,
+        state.conversations,
+        workspaces,
+        projects,
+        selectedFilterProject,
+        searchQuery,
+        removedIds,
+    ) {
+        val byId = LinkedHashMap<String, KanbanSessionSummary>()
+        for (s in kanbanSessions) {
+            if (!s.isArchived && s.id !in removedIds) {
+                byId[s.id] = s
+            }
+        }
+        for (c in state.conversations) {
+            if (c.id !in removedIds && !byId.containsKey(c.id)) {
+                val branch = workspaces.find { it.id == c.workspaceId }?.branch
+                val converted = KanbanSessionSummary.fromConversationSummary(c, branch = branch)
+                if (!converted.isArchived) {
+                    byId[c.id] = converted
+                }
+            }
+        }
+        val allowedWorkspaces: Set<String>? = selectedFilterProject?.let { proj ->
+            workspaces.filter { it.projectId.equals(proj.id, ignoreCase = true) }.map { it.id }.toSet()
+        }
+        val q = searchQuery.trim().lowercase()
+        byId.values
+            .filter { item ->
+                if (allowedWorkspaces != null && allowedWorkspaces.isNotEmpty() && item.workspaceId !in allowedWorkspaces) {
+                    return@filter false
+                }
+                if (q.isEmpty()) return@filter true
+                val projName = projectNameForWorkspace(item.workspaceId).orEmpty().lowercase()
+                item.resolvedTitle.lowercase().contains(q) ||
+                    item.workspaceDisplayLabel.lowercase().contains(q) ||
+                    item.agentDisplayLabel.lowercase().contains(q) ||
+                    item.model.orEmpty().lowercase().contains(q) ||
+                    projName.contains(q)
+            }
+            .sortedWith(
+                compareByDescending<KanbanSessionSummary> { it.isPinned }
+                    .thenByDescending { it.updatedEpochMs ?: 0L },
+            )
     }
 
     val isOnline = state.connection == ConnectionState.Online
 
-    Box(
-        Modifier
+    Column(
+        modifier = Modifier
             .fillMaxSize()
-            .background(colors.bg)
-            .pointerInput(isSidebarOpen) {
-                var totalDx = 0f
-                var startX = 0f
-                detectHorizontalDragGestures(
-                    onDragStart = { offset ->
-                        startX = offset.x
-                        totalDx = 0f
-                    },
-                    onHorizontalDrag = { _, dragAmount ->
-                        totalDx += dragAmount
-                    },
-                    onDragEnd = {
-                        if (!isSidebarOpen && startX < 96f && totalDx > 100f) {
-                            isSidebarOpen = true
-                        } else if (isSidebarOpen && totalDx < -100f) {
-                            isSidebarOpen = false
-                        }
-                    },
-                )
-            },
+            .background(colors.bg),
     ) {
-        // Main Calm AI Chat Landing View (1:1 with iOS ConversationsView.landingWorkspaceView)
-        Column(
-            Modifier
-                .fillMaxSize()
-                .imePadding(),
+        // Level-1 Navigation Bar: Project Filter | Centered "会话" | Connection Pill
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
         ) {
-            // Top Bar: Sidebar Button | Connection Status | Diff/New Button
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(colors.bgElevated)
-                        .clickable { isSidebarOpen = true },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Rounded.Menu, contentDescription = "打开侧边栏", tint = colors.textPrimary, modifier = Modifier.size(18.dp))
-                }
-
-                Spacer(Modifier.weight(1f))
-
+            Box(modifier = Modifier.align(Alignment.CenterStart)) {
                 Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { projectMenuExpanded = true }
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
-                    Box(
-                        Modifier
-                            .size(6.5.dp)
-                            .clip(CircleShape)
-                            .background(if (isOnline) colors.pass else colors.hold),
+                    Icon(
+                        imageVector = if (selectedFilterProject == null) Icons.Rounded.Layers else Icons.Rounded.Folder,
+                        contentDescription = null,
+                        tint = colors.textPrimary,
+                        modifier = Modifier.size(15.dp),
                     )
                     Text(
-                        if (isOnline) "已连接" else connectionLabel(state.connection),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = colors.textSecondary,
-                    )
-                }
-
-                Spacer(Modifier.weight(1f))
-
-                Box(
-                    Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(colors.bgElevated)
-                        .clickable {
-                            if (currentWorkspace != null) {
-                                showDiffSheet = true
-                            }
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Rounded.Code, contentDescription = "代码差异", tint = colors.textPrimary, modifier = Modifier.size(18.dp))
-                }
-            }
-
-            if (state.inbox.isNotEmpty()) {
-                Row(
-                    Modifier
-                        .padding(horizontal = 16.dp, vertical = 4.dp)
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(colors.hold.copy(0.14f))
-                        .clickable { model.openConversation(state.inbox.first().conversationId) }
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(
-                        "${state.inbox.size} 条待你审批或回复",
-                        fontSize = 13.sp,
+                        text = selectedFilterProject?.name ?: "全部项目",
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = colors.hold,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = colors.hold, modifier = Modifier.size(16.dp))
-                }
-            }
-
-            Spacer(Modifier.weight(1f))
-
-            // Center Focal Area: VibeX Logo + "有什么可以帮你？" + Project Context Pill
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                    ) {
-                        if (composerMenu != null) composerMenu = null
-                        focusManager.clearFocus()
-                    }
-                    .padding(horizontal = 24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                Box(
-                    Modifier
-                        .size(56.dp)
-                        .shadow(10.dp, RoundedCornerShape(14.dp), ambientColor = Color.Black.copy(0.10f), spotColor = Color.Black.copy(0.14f))
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(colors.bgElevated),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    BrandMark(40.dp)
-                }
-
-                Text(
-                    "有什么可以帮你？",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = colors.textPrimary,
-                    textAlign = TextAlign.Center,
-                )
-
-                // Project Context Pill (1:1 with iOS projectContextPill)
-                Row(
-                    Modifier
-                        .clip(CircleShape)
-                        .background(colors.bgElevated)
-                        .border(0.6.dp, colors.stroke, CircleShape)
-                        .clickable { showProjectSheet = true }
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Icon(Icons.Rounded.Folder, null, tint = colors.textSecondary, modifier = Modifier.size(14.dp))
-                    Text(
-                        currentProject?.name ?: "选择项目",
-                        fontSize = 13.5.sp,
-                        fontWeight = FontWeight.Medium,
                         color = colors.textPrimary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    val branch = currentWorkspace?.branch?.ifBlank { "main" } ?: "main"
-                    Text("·", color = colors.textTertiary, fontSize = 13.sp)
-                    Icon(Icons.Rounded.AccountTree, null, tint = colors.textSecondary, modifier = Modifier.size(12.dp))
-                    Text(branch, fontSize = 12.5.sp, color = colors.textSecondary)
-                    Icon(Icons.Rounded.UnfoldMore, null, tint = colors.textTertiary, modifier = Modifier.size(14.dp))
-                }
-            }
-
-            Spacer(Modifier.weight(1f))
-
-            // Quiet Starter Suggestion Chips (shown when draft is empty and composer menu is closed)
-            if (draft.isBlank() && composerMenu == null) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 14.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    starterSuggestions.forEach { chip ->
-                        Text(
-                            chip.label,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = colors.textSecondary,
-                            modifier = Modifier
-                                .clip(CircleShape)
-                                .background(colors.bgElevated)
-                                .border(0.6.dp, colors.stroke, CircleShape)
-                                .clickable { draft = chip.prompt }
-                                .padding(horizontal = 13.dp, vertical = 7.5.dp),
-                        )
-                    }
-                }
-            }
-
-            // 1:1 reuse of iOS PromptBar (`ConversationsView.swift` landingPromptBar)
-            val resolvedWsId = currentWorkspace?.id?.ifBlank { null }
-                ?: state.conversations.firstOrNull { it.workspaceId.isNotBlank() }?.workspaceId
-            val landingModes = remember(currentAgent) {
-                currentAgent?.sessionModes?.takeIf { it.isNotEmpty() } ?: listOf(
-                    SessionMode("manual", "手动审批"),
-                    SessionMode("accept_edits", "自动接受编辑"),
-                    SessionMode("plan", "仅规划"),
-                    SessionMode("auto", "自动"),
-                    SessionMode("bypass", "跳过权限"),
-                )
-            }
-            val currentAgentId = currentAgent?.id ?: "claude_code"
-            val baseModelOption = remember(currentAgent, currentAgentId) {
-                currentAgent?.sessionConfig?.firstOrNull {
-                    val k = it.key.lowercase()
-                    val c = it.category.lowercase()
-                    c == "model" || k == "model" || k.contains("model")
-                } ?: dev.vibex.companion.fallbackModelOptionForAgent(currentAgentId)
-            }
-            val baseEffortOption = remember(currentAgent) {
-                currentAgent?.sessionConfig?.firstOrNull {
-                    val k = it.key.lowercase()
-                    val c = it.category.lowercase()
-                    c.contains("thought") || c.contains("effort") || c.contains("reason") ||
-                        k.contains("thought") || k.contains("effort") || k.contains("thinking") || k.contains("reason")
-                } ?: SessionConfigOption(
-                    key = "reasoning_effort",
-                    label = "推理强度",
-                    category = "thought_level",
-                    value = "medium",
-                    choices = listOf(
-                        SessionConfigChoice("low", "低"),
-                        SessionConfigChoice("medium", "中"),
-                        SessionConfigChoice("high", "高"),
-                    ),
-                )
-            }
-            val activeModelValue = selectedModelByAgent[currentAgentId]
-                ?: baseModelOption.value.ifBlank { baseModelOption.choices.firstOrNull()?.value ?: "default" }
-            val landingConfigOptions = remember(
-                currentAgentId,
-                baseModelOption,
-                baseEffortOption,
-                activeModelValue,
-                landingEffortValue,
-                customRelayModels,
-            ) {
-                val mergedChoices = buildList {
-                    customRelayModels.forEach { custom ->
-                        if (baseModelOption.choices.none { it.value == custom }) {
-                            add(SessionConfigChoice(custom, "$custom (自定义/中转)"))
-                        }
-                    }
-                    addAll(baseModelOption.choices)
-                    if (none { it.value == activeModelValue }) {
-                        add(0, SessionConfigChoice(activeModelValue, activeModelValue))
-                    }
-                }
-                listOf(
-                    baseModelOption.copy(
-                        value = activeModelValue,
-                        choices = mergedChoices,
-                    ),
-                    baseEffortOption.copy(
-                        value = landingEffortValue,
-                    ),
-                )
-            }
-
-            PromptBar(
-                text = draft,
-                onTextChange = { draft = it },
-                menu = composerMenu,
-                onMenuChange = { composerMenu = it },
-                agentId = currentAgentId,
-                agent = currentAgent,
-                agents = agents,
-                showAgentSelector = true,
-                onSelectAgent = { nextAgentId ->
-                    selectedAgentId = nextAgentId
-                },
-                onAddCustomModel = { rawModel ->
-                    val trimmed = rawModel.trim()
-                    if (trimmed.isNotEmpty()) {
-                        if (trimmed !in customRelayModels) {
-                            customRelayModels = listOf(trimmed) + customRelayModels
-                        }
-                        selectedModelByAgent = selectedModelByAgent + (currentAgentId to trimmed)
-                    }
-                },
-                modes = landingModes,
-                currentModeId = landingModeId,
-                configOptions = landingConfigOptions,
-                isStreaming = false,
-                enabled = state.connection.allowsWrites && !resolvedWsId.isNullOrBlank(),
-                onSend = {
-                    val text = draft.trim()
-                    val wsId = resolvedWsId ?: return@PromptBar
-                    if (text.isEmpty()) return@PromptBar
-                    composerMenu = null
-                    draft = ""
-                    model.createConversation(
-                        workspaceId = wsId,
-                        agentId = currentAgentId,
-                        title = text.take(36),
-                        prompt = text,
-                        modeId = landingModeId,
-                        config = mapOf(
-                            baseModelOption.key to activeModelValue,
-                            baseEffortOption.key to landingEffortValue,
-                        ),
+                    Icon(
+                        imageVector = Icons.Rounded.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = colors.textSecondary,
+                        modifier = Modifier.size(15.dp),
                     )
-                },
-                onStop = {},
-                onSelectMode = { modeId ->
-                    landingModeId = modeId
-                },
-                onSelectOption = { key, value ->
-                    if (key == baseModelOption.key || key.lowercase().contains("model")) {
-                        selectedModelByAgent = selectedModelByAgent + (currentAgentId to value)
-                    } else {
-                        landingEffortValue = value
+                }
+
+                VibexDropdownMenu(
+                    expanded = projectMenuExpanded,
+                    onDismissRequest = { projectMenuExpanded = false },
+                ) {
+                    VibexDropdownMenuItem(
+                        text = "全部项目",
+                        leadingIcon = Icons.Rounded.Layers,
+                        selected = selectedFilterProject == null,
+                        onClick = {
+                            projectMenuExpanded = false
+                            model.selectProjectInPlace(null)
+                        },
+                    )
+                    if (projects.isNotEmpty()) {
+                        VibexDropdownDivider()
+                        projects.forEach { proj ->
+                            val isSelected = selectedFilterProject?.id?.equals(proj.id, ignoreCase = true) == true
+                            VibexDropdownMenuItem(
+                                text = proj.name,
+                                leadingIcon = Icons.Rounded.Folder,
+                                selected = isSelected,
+                                onClick = {
+                                    projectMenuExpanded = false
+                                    model.selectProjectInPlace(proj.id)
+                                },
+                            )
+                        }
                     }
-                },
-                onOpenFileBrowser = if (currentWorkspace != null) {
-                    { showFileBrowserSheet = true }
-                } else {
-                    null
-                },
-                onFocusChange = { isComposerFocused = it },
-            )
-        }
+                }
+            }
 
-        // Slide-Out Sidebar Scrim
-        AnimatedVisibility(
-            visible = isSidebarOpen,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.zIndex(1f),
-        ) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(0.36f))
-                    .clickable { isSidebarOpen = false },
+            Text(
+                text = "会话",
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold,
+                color = colors.textPrimary,
+                modifier = Modifier.align(Alignment.Center),
             )
-        }
 
-        // Slide-Out Sidebar Drawer (1:1 with iOS ConversationsView.sidebarDrawer)
-        AnimatedVisibility(
-            visible = isSidebarOpen,
-            enter = slideInHorizontally { -it },
-            exit = slideOutHorizontally { -it },
-            modifier = Modifier.zIndex(2f),
-        ) {
-            Column(
-                Modifier
-                    .width(304.dp)
-                    .fillMaxHeight()
-                    .background(colors.bgElevated)
-                    .clickable(enabled = false) {},
+            Row(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .clip(CircleShape)
+                    .background(colors.card)
+                    .border(0.6.dp, colors.stroke, CircleShape)
+                    .clickable { model.openDesktopConnect() }
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
             ) {
-                // Sidebar Top Bar: Segmented Switcher (最近对话 | 项目文件) + New Chat Button
+                Box(
+                    modifier = Modifier
+                        .size(6.5.dp)
+                        .clip(CircleShape)
+                        .background(if (isOnline) colors.pass else colors.hold),
+                )
+                Text(
+                    text = if (isOnline) "已连接" else connectionLabel(state.connection),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = colors.textSecondary,
+                )
+            }
+        }
+
+        // Pending Approval / Question Banner
+        if (state.inbox.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(colors.hold.copy(alpha = 0.14f))
+                    .clickable { model.openConversation(state.inbox.first().conversationId) }
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = "${state.inbox.size} 条待你审批或回复",
+                    style = TextStyle(
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFeatureSettings = "tnum",
+                        color = colors.hold,
+                    ),
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(
+                    imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = colors.hold,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+
+        if (initialLoading && mergedSessions.isEmpty() && state.conversationsLoading) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
                 Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Row(
-                        Modifier
-                            .clip(CircleShape)
-                            .background(colors.segmentedTrack)
-                            .padding(3.dp),
-                        horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    ) {
-                        listOf("conversations" to "最近对话", "files" to "项目文件").forEach { (id, label) ->
-                            val selected = sidebarTab == id
-                            Text(
-                                label,
-                                fontSize = 13.sp,
-                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                                color = if (selected) colors.textPrimary else colors.textSecondary,
-                                modifier = Modifier
-                                    .then(
-                                        if (selected) Modifier.shadow(1.5.dp, CircleShape, ambientColor = Color.Black.copy(0.08f))
-                                        else Modifier,
-                                    )
-                                    .clip(CircleShape)
-                                    .background(if (selected) colors.segmentedThumb else Color.Transparent)
-                                    .clickable { sidebarTab = id }
-                                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                            )
-                        }
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = colors.accent,
+                    )
+                    Text(
+                        text = "正在同步会话…",
+                        fontSize = 14.sp,
+                        color = colors.textSecondary,
+                    )
+                }
+            }
+        } else {
+            CompanionRefresh(
+                refreshing = refreshing,
+                onRefresh = {
+                    scope.launch {
+                        refreshing = true
+                        model.refreshCurrent()
+                        reloadKanban(silent = true)
+                        refreshing = false
                     }
+                },
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                val (runningList, reviewList, recentReadList, todoList, doneList) = remember(
+                    mergedSessions,
+                    state.manuallyCompletedSessionIds,
+                ) {
+                    val nowMs = System.currentTimeMillis()
+                    val running = mergedSessions.filter {
+                        it.status == KanbanSessionStatus.InProgress ||
+                            (it.isRunning && it.status != KanbanSessionStatus.InReview)
+                    }
+                    val runningIds = running.mapTo(HashSet()) { it.id }
+                    val review = mergedSessions.filter {
+                        it.status == KanbanSessionStatus.InReview && it.id !in runningIds
+                    }
+                    val recentRead = mergedSessions.filter {
+                        it.isRecentlyActiveReadSession(state.manuallyCompletedSessionIds, nowMs)
+                    }
+                    val todo = mergedSessions.filter {
+                        it.status == KanbanSessionStatus.Todo && !it.isRunning
+                    }
+                    val done = mergedSessions.filter {
+                        it.status == KanbanSessionStatus.Done &&
+                            !it.isRunning &&
+                            !it.isRecentlyActiveReadSession(state.manuallyCompletedSessionIds, nowMs)
+                    }
+                    listOf(running, review, recentRead, todo, done)
+                }
+                val hasActive = runningList.isNotEmpty() ||
+                    reviewList.isNotEmpty() ||
+                    recentReadList.isNotEmpty() ||
+                    todoList.isNotEmpty()
+                val isSearching = searchQuery.trim().isNotEmpty()
 
-                    Spacer(Modifier.weight(1f))
-
-                    Box(
-                        Modifier
-                            .size(32.dp)
-                            .clip(CircleShape)
-                            .background(colors.bg)
-                            .clickable { isSidebarOpen = false },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(Icons.Rounded.EditNote, contentDescription = "新对话", tint = colors.textPrimary, modifier = Modifier.size(18.dp))
+                val workspaceGroups = remember(mergedSessions, organization, projects, workspaces) {
+                    if (organization != SessionListOrganization.WorkspaceGrouped) {
+                        emptyList()
+                    } else {
+                        mergedSessions
+                            .groupBy { item ->
+                                val proj = projectNameForWorkspace(item.workspaceId) ?: "其他项目"
+                                val branch = item.workspaceDisplayLabel
+                                if (branch.isEmpty()) proj else "$proj · $branch"
+                            }
+                            .entries
+                            .sortedByDescending { entry -> entry.value.firstOrNull()?.updatedEpochMs ?: 0L }
                     }
                 }
 
-                // Sidebar Search Box
-                Row(
-                    Modifier
-                        .padding(horizontal = 14.dp)
-                        .padding(bottom = 10.dp)
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(colors.bg)
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        end = 16.dp,
+                        top = 6.dp,
+                        bottom = BOTTOM_DOCK_CLEARANCE + 18.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
-                    Icon(Icons.Rounded.Search, null, tint = colors.textSecondary, modifier = Modifier.size(15.dp))
-                    Box(Modifier.weight(1f)) {
-                        if (sidebarSearch.isEmpty()) {
-                            Text(
-                                if (sidebarTab == "conversations") "搜索对话…" else "搜索项目…",
-                                fontSize = 13.5.sp,
-                                color = colors.textTertiary,
+                    // Search + Segmented Organization Header
+                    item(key = "header_controls") {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            UnifiedSearchBar(
+                                query = searchQuery,
+                                onQueryChange = { searchQuery = it },
+                                placeholder = "搜索会话、分支或模型…",
                             )
-                        }
-                        BasicTextField(
-                            value = sidebarSearch,
-                            onValueChange = { sidebarSearch = it },
-                            singleLine = true,
-                            textStyle = TextStyle(color = colors.textPrimary, fontSize = 13.5.sp),
-                            cursorBrush = SolidColor(colors.accent),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                    if (sidebarSearch.isNotEmpty()) {
-                        Icon(
-                            Icons.Rounded.Cancel,
-                            null,
-                            tint = colors.textTertiary,
-                            modifier = Modifier.size(15.dp).clickable { sidebarSearch = "" },
-                        )
-                    }
-                }
 
-                HorizontalDivider(color = colors.hairline)
-
-                // Sidebar Body
-                if (sidebarTab == "conversations") {
-                    val q = sidebarSearch.trim().lowercase()
-                    val filtered = remember(state.conversations, q) {
-                        state.conversations.filter {
-                            q.isEmpty() || it.title.lowercase().contains(q) || it.agentId.lowercase().contains(q)
-                        }
-                    }
-                    LazyColumn(
-                        Modifier.weight(1f).fillMaxWidth(),
-                        contentPadding = PaddingValues(vertical = 10.dp),
-                    ) {
-                        if (currentProject != null) {
-                            item {
-                                Text(
-                                    currentProject.name,
-                                    fontSize = 11.5.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = colors.textSecondary,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                                )
-                            }
-                        }
-                        if (filtered.isEmpty()) {
-                            item {
-                                Text(
-                                    "暂无对话记录",
-                                    fontSize = 13.sp,
-                                    color = colors.textSecondary,
-                                    textAlign = TextAlign.Center,
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
-                                )
-                            }
-                        } else {
-                            items(filtered, key = { it.id }) { item ->
-                                val agent = catalogAgent(state, item.agentId)
-                                val relTime = remember(item.updatedAt) { relativeTime(item.updatedAt) }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
                                 Row(
-                                    Modifier
-                                        .padding(horizontal = 8.dp, vertical = 2.dp)
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(9.dp))
-                                        .then(
-                                            longPressModifier(
-                                                onClick = {
-                                                    isSidebarOpen = false
-                                                    model.openConversation(item.id)
-                                                },
-                                                onLongClick = { offset ->
-                                                    menuAnchor = offset
-                                                    menuId = item.id
-                                                },
-                                            ),
-                                        )
-                                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(colors.segmentedTrack)
+                                        .padding(2.5.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(2.dp),
                                 ) {
-                                    AgentAvatar(item.agentId, size = 20.dp, iconSvg = agent?.iconSvg, displayName = agent?.displayName.orEmpty())
-                                    Text(
-                                        item.title.ifBlank { "未命名对话" },
-                                        fontSize = 13.5.sp,
-                                        color = colors.textPrimary,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                    Text(
-                                        relTime,
-                                        fontSize = 10.5.sp,
-                                        color = colors.textTertiary,
-                                    )
+                                    SessionListOrganization.entries.forEach { mode ->
+                                        val selected = organization == mode
+                                        Text(
+                                            text = mode.label,
+                                            fontSize = 12.5.sp,
+                                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                                            color = if (selected) colors.textPrimary else colors.textSecondary,
+                                            modifier = Modifier
+                                                .then(
+                                                    if (selected) {
+                                                        Modifier.shadow(
+                                                            1.5.dp,
+                                                            RoundedCornerShape(8.dp),
+                                                            ambientColor = Color.Black.copy(alpha = 0.08f),
+                                                        )
+                                                    } else {
+                                                        Modifier
+                                                    },
+                                                )
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(if (selected) colors.segmentedThumb else Color.Transparent)
+                                                .clickable { organization = mode }
+                                                .padding(horizontal = 12.dp, vertical = 5.5.dp),
+                                        )
+                                    }
                                 }
+
+                                Spacer(modifier = Modifier.weight(1f))
+
+                                Text(
+                                    text = "${mergedSessions.size} 个会话",
+                                    style = TextStyle(
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        fontFeatureSettings = "tnum",
+                                        color = colors.textSecondary,
+                                    ),
+                                )
                             }
                         }
                     }
-                } else {
-                    val q = sidebarSearch.trim().lowercase()
-                    val filteredProjects = remember(projects, q) {
-                        projects.filter {
-                            q.isEmpty() || it.name.lowercase().contains(q) || it.path.lowercase().contains(q)
+
+                    if (mergedSessions.isEmpty()) {
+                        item(key = "empty_sessions") {
+                            EmptySessionsCard(isSearching = isSearching)
                         }
-                    }
-                    LazyColumn(
-                        Modifier.weight(1f).fillMaxWidth(),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        items(filteredProjects, key = { it.id }) { proj ->
-                            val ws = workspaces.firstOrNull { it.projectId == proj.id }
-                            val expanded = proj.id in expandedProjects
-                            Column {
+                    } else if (organization == SessionListOrganization.StatusGrouped) {
+                        if (!hasActive && !isSearching) {
+                            item(key = "calm_all_done_banner") {
                                 Row(
-                                    Modifier
+                                    modifier = Modifier
                                         .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .clickable {
-                                            if (expanded) {
-                                                expandedProjects = expandedProjects - proj.id
-                                            } else {
-                                                expandedProjects = expandedProjects + proj.id
-                                                if (ws != null && !workspaceEntries.containsKey(ws.id)) {
-                                                    model.loadWorkspaceEntries(ws.id) { entries ->
-                                                        workspaceEntries = workspaceEntries + (ws.id to entries)
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(colors.card)
+                                        .border(0.6.dp, colors.stroke, RoundedCornerShape(14.dp))
+                                        .padding(horizontal = 14.dp, vertical = 12.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                                 ) {
                                     Icon(
-                                        if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                                        null,
-                                        tint = colors.textTertiary,
-                                        modifier = Modifier.size(16.dp),
+                                        imageVector = Icons.Rounded.CheckCircle,
+                                        contentDescription = null,
+                                        tint = StatusGreen,
+                                        modifier = Modifier.size(17.dp),
                                     )
-                                    Icon(Icons.Rounded.Folder, null, tint = colors.accent, modifier = Modifier.size(16.dp))
                                     Text(
-                                        proj.name,
-                                        fontSize = 13.5.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = colors.textPrimary,
-                                        modifier = Modifier.weight(1f),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
+                                        text = "当前没有进行中或近期对话，点底部 + 新建会话",
+                                        fontSize = 13.sp,
+                                        color = colors.textSecondary,
                                     )
-                                    if (ws != null) {
+                                }
+                            }
+                        }
+
+                        if (runningList.isNotEmpty()) {
+                            item(key = "sec_running") {
+                                SessionSectionBlock(
+                                    title = "进行中",
+                                    tint = StatusOrange,
+                                    icon = Icons.Rounded.Bolt,
+                                    items = runningList,
+                                    state = state,
+                                    showStatusBadge = false,
+                                    projectNameForWorkspace = ::projectNameForWorkspace,
+                                    onTap = { session ->
+                                        openSession(session, model) { viewedId ->
+                                            kanbanSessions = kanbanSessions.map {
+                                                if (it.id == viewedId) it.copy(status = KanbanSessionStatus.Done) else it
+                                            }
+                                        }
+                                    },
+                                    onLongPress = { session, offset ->
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        contextAnchor = offset
+                                        contextTarget = session
+                                    },
+                                )
+                            }
+                        }
+
+                        if (reviewList.isNotEmpty()) {
+                            item(key = "sec_review") {
+                                SessionSectionBlock(
+                                    title = "待检查",
+                                    tint = StatusPurple,
+                                    icon = Icons.Rounded.Visibility,
+                                    items = reviewList,
+                                    state = state,
+                                    showStatusBadge = false,
+                                    projectNameForWorkspace = ::projectNameForWorkspace,
+                                    onTap = { session ->
+                                        openSession(session, model) { viewedId ->
+                                            kanbanSessions = kanbanSessions.map {
+                                                if (it.id == viewedId) it.copy(status = KanbanSessionStatus.Done) else it
+                                            }
+                                        }
+                                    },
+                                    onLongPress = { session, offset ->
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        contextAnchor = offset
+                                        contextTarget = session
+                                    },
+                                )
+                            }
+                        }
+
+                        if (recentReadList.isNotEmpty()) {
+                            item(key = "sec_recent_read") {
+                                SessionSectionBlock(
+                                    title = "近期对话",
+                                    tint = StatusTeal,
+                                    icon = Icons.Rounded.Forum,
+                                    items = recentReadList,
+                                    state = state,
+                                    showStatusBadge = false,
+                                    projectNameForWorkspace = ::projectNameForWorkspace,
+                                    onTap = { session ->
+                                        openSession(session, model) { viewedId ->
+                                            kanbanSessions = kanbanSessions.map {
+                                                if (it.id == viewedId) it.copy(status = KanbanSessionStatus.Done) else it
+                                            }
+                                        }
+                                    },
+                                    onLongPress = { session, offset ->
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        contextAnchor = offset
+                                        contextTarget = session
+                                    },
+                                )
+                            }
+                        }
+
+                        if (todoList.isNotEmpty()) {
+                            item(key = "sec_todo") {
+                                SessionSectionBlock(
+                                    title = "待开始",
+                                    tint = StatusBlue,
+                                    icon = Icons.Rounded.RadioButtonUnchecked,
+                                    items = todoList,
+                                    state = state,
+                                    showStatusBadge = false,
+                                    projectNameForWorkspace = ::projectNameForWorkspace,
+                                    onTap = { session ->
+                                        openSession(session, model) { viewedId ->
+                                            kanbanSessions = kanbanSessions.map {
+                                                if (it.id == viewedId) it.copy(status = KanbanSessionStatus.Done) else it
+                                            }
+                                        }
+                                    },
+                                    onLongPress = { session, offset ->
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        contextAnchor = offset
+                                        contextTarget = session
+                                    },
+                                )
+                            }
+                        }
+
+                        if (doneList.isNotEmpty()) {
+                            item(key = "sec_done_shelf") {
+                                val expanded = isSearching || isCompletedShelfExpanded
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(14.dp))
+                                            .background(colors.card)
+                                            .border(0.6.dp, colors.stroke, RoundedCornerShape(14.dp))
+                                            .clickable {
+                                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                isCompletedShelfExpanded = !isCompletedShelfExpanded
+                                            }
+                                            .padding(horizontal = 14.dp, vertical = 11.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = if (expanded) {
+                                                Icons.Rounded.KeyboardArrowDown
+                                            } else {
+                                                Icons.AutoMirrored.Rounded.KeyboardArrowRight
+                                            },
+                                            contentDescription = null,
+                                            tint = colors.textSecondary,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                        Icon(
+                                            imageVector = Icons.Rounded.Verified,
+                                            contentDescription = null,
+                                            tint = StatusGreen.copy(alpha = 0.88f),
+                                            modifier = Modifier.size(15.dp),
+                                        )
                                         Text(
-                                            "差异",
-                                            fontSize = 11.sp,
-                                            color = colors.accent,
+                                            text = "已完成历史会话",
+                                            fontSize = 13.5.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = colors.textSecondary,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        Box(
                                             modifier = Modifier
-                                                .clip(RoundedCornerShape(6.dp))
-                                                .background(colors.accent.copy(0.12f))
-                                                .clickable {
-                                                    model.selectProject(proj.id)
-                                                    isSidebarOpen = false
-                                                    showDiffSheet = true
-                                                }
-                                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                                                .clip(CircleShape)
+                                                .background(colors.textPrimary.copy(alpha = 0.08f))
+                                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                                        ) {
+                                            Text(
+                                                text = "${doneList.size}",
+                                                style = TextStyle(
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    fontFeatureSettings = "tnum",
+                                                    color = colors.textSecondary,
+                                                ),
+                                            )
+                                        }
+                                    }
+
+                                    AnimatedVisibility(
+                                        visible = expanded,
+                                        enter = expandVertically() + fadeIn(),
+                                        exit = shrinkVertically() + fadeOut(),
+                                    ) {
+                                        SessionCardGroup(
+                                            items = doneList,
+                                            state = state,
+                                            showStatusBadge = false,
+                                            projectNameForWorkspace = ::projectNameForWorkspace,
+                                            onTap = { session ->
+                                        openSession(session, model) { viewedId ->
+                                            kanbanSessions = kanbanSessions.map {
+                                                if (it.id == viewedId) it.copy(status = KanbanSessionStatus.Done) else it
+                                            }
+                                        }
+                                    },
+                                            onLongPress = { session, offset ->
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                contextAnchor = offset
+                                                contextTarget = session
+                                            },
                                         )
                                     }
                                 }
-                                if (expanded && ws != null) {
-                                    val entries = workspaceEntries[ws.id].orEmpty()
-                                    Column(Modifier.padding(start = 28.dp)) {
-                                        entries.take(30).forEach { entry ->
-                                            Row(
-                                                Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                            ) {
-                                                Icon(
-                                                    if (entry.directory) Icons.Rounded.Folder else Icons.Rounded.Description,
-                                                    null,
-                                                    tint = colors.textSecondary,
-                                                    modifier = Modifier.size(14.dp),
-                                                )
-                                                Text(
-                                                    entry.name,
-                                                    fontSize = 12.5.sp,
-                                                    color = colors.textSecondary,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis,
-                                                )
+                            }
+                        }
+                    } else {
+                        workspaceGroups.forEach { (groupHeader, groupItems) ->
+                            item(key = "ws_group_$groupHeader") {
+                                SessionSectionBlock(
+                                    title = groupHeader,
+                                    tint = colors.textSecondary,
+                                    icon = Icons.Rounded.AccountTree,
+                                    items = groupItems,
+                                    state = state,
+                                    showStatusBadge = true,
+                                    projectNameForWorkspace = ::projectNameForWorkspace,
+                                    onTap = { session ->
+                                        openSession(session, model) { viewedId ->
+                                            kanbanSessions = kanbanSessions.map {
+                                                if (it.id == viewedId) it.copy(status = KanbanSessionStatus.Done) else it
                                             }
                                         }
+                                    },
+                                    onLongPress = { session, offset ->
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        contextAnchor = offset
+                                        contextTarget = session
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Long-press Session Context Menu
+    val activeMenuSession = contextTarget
+    if (activeMenuSession != null && state.connection.allowsWrites) {
+        val isRecentRead = activeMenuSession.isRecentlyActiveReadSession(state.manuallyCompletedSessionIds)
+        val actions = buildList {
+            KanbanSessionStatus.activeColumns.forEach { targetStatus ->
+                val isCurrent = activeMenuSession.status == targetStatus &&
+                    !(targetStatus == KanbanSessionStatus.Done && isRecentRead)
+                if (!isCurrent) {
+                    add(
+                        ActionMenuItem("标为「${targetStatus.title}」") {
+                            kanbanSessions = kanbanSessions.map {
+                                if (it.id == activeMenuSession.id) {
+                                    it.copy(
+                                        status = targetStatus,
+                                        isRunning = if (targetStatus == KanbanSessionStatus.InProgress) it.isRunning else false,
+                                    )
+                                } else {
+                                    it
+                                }
+                            }
+                            model.setManualSessionStatus(activeMenuSession.id, targetStatus)
+                        },
+                    )
+                }
+            }
+            add(
+                ActionMenuItem(if (activeMenuSession.isPinned) "取消置顶" else "置顶会话") {
+                    val nextPinned = !activeMenuSession.isPinned
+                    kanbanSessions = kanbanSessions.map {
+                        if (it.id == activeMenuSession.id) {
+                            it.copy(pinnedAt = if (nextPinned) Instant.now().toString() else null)
+                        } else {
+                            it
+                        }
+                    }
+                    scope.launch {
+                        runCatching { model.mutateKanbanSessionPinned(activeMenuSession.id, nextPinned) }
+                            .onFailure { model.fail(it) }
+                    }
+                },
+            )
+            add(
+                ActionMenuItem("重命名") {
+                    renameDraft = activeMenuSession.name ?: activeMenuSession.resolvedTitle
+                    renamingSession = activeMenuSession
+                },
+            )
+            if (activeMenuSession.isForkSupported) {
+                add(
+                    ActionMenuItem("创建分支会话") {
+                        scope.launch {
+                            runCatching { model.mutateKanbanSessionFork(activeMenuSession.id) }
+                                .onSuccess { forkedId ->
+                                    if (!forkedId.isNullOrBlank()) {
+                                        model.openConversation(forkedId)
                                     }
                                 }
-                            }
+                                .onFailure { model.fail(it) }
                         }
-                    }
-                }
+                    },
+                )
             }
+            add(
+                ActionMenuItem("归档会话") {
+                    removedIds = removedIds + activeMenuSession.id
+                    model.archiveConversation(activeMenuSession.id)
+                },
+            )
+            add(
+                ActionMenuItem("删除会话", danger = true) {
+                    deletingSession = activeMenuSession
+                },
+            )
         }
 
-        // Project Picker Bottom Sheet
-        if (showProjectSheet) {
-            ModalBottomSheet(
-                onDismissRequest = { showProjectSheet = false },
-                containerColor = colors.bgElevated,
-            ) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+        ActionMenu(
+            items = actions,
+            anchor = contextAnchor,
+            onDismiss = { contextTarget = null },
+        )
+    }
+
+    // Rename Dialog
+    val activeRename = renamingSession
+    if (activeRename != null) {
+        AlertDialog(
+            onDismissRequest = { renamingSession = null },
+            title = { Text("重命名会话") },
+            text = {
+                OutlinedTextField(
+                    value = renameDraft,
+                    onValueChange = { renameDraft = it },
+                    singleLine = true,
+                    placeholder = { Text("会话名称") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val trimmed = renameDraft.trim()
+                        renamingSession = null
+                        kanbanSessions = kanbanSessions.map {
+                            if (it.id == activeRename.id) it.copy(name = trimmed.ifEmpty { null }) else it
+                        }
+                        scope.launch {
+                            runCatching { model.mutateKanbanSessionRename(activeRename.id, trimmed.ifEmpty { null }) }
+                                .onFailure { model.fail(it) }
+                        }
+                    },
                 ) {
-                    Text(
-                        "切换项目",
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = colors.textPrimary,
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
-                    )
-                    projects.forEach { proj ->
-                        val selected = proj.id == currentProject?.id
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(if (selected) colors.accent.copy(0.12f) else colors.bg)
-                                .clickable {
-                                    showProjectSheet = false
-                                    model.selectProject(proj.id)
-                                }
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            Icon(Icons.Rounded.Folder, null, tint = if (selected) colors.accent else colors.textSecondary, modifier = Modifier.size(18.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(proj.name, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = colors.textPrimary)
-                                if (proj.path.isNotBlank()) {
-                                    Text(proj.path, fontSize = 11.sp, fontFamily = PlexMono, color = colors.textTertiary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
-                            }
-                            if (selected) {
-                                Icon(Icons.Rounded.Check, null, tint = colors.accent, modifier = Modifier.size(18.dp))
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(16.dp))
+                    Text("保存")
                 }
-            }
-        }
+            },
+            dismissButton = {
+                TextButton(onClick = { renamingSession = null }) {
+                    Text("取消")
+                }
+            },
+        )
+    }
 
-        if (showDiffSheet && currentWorkspace != null) {
-            DiffListSheet(
-                workspaceId = currentWorkspace.id,
-                conversationId = state.conversations.firstOrNull()?.id.orEmpty(),
-                model = model,
-                onDismiss = { showDiffSheet = false },
+    // Delete Confirm Dialog
+    val activeDelete = deletingSession
+    if (activeDelete != null) {
+        AlertDialog(
+            onDismissRequest = { deletingSession = null },
+            title = { Text("删除会话") },
+            text = { Text("确定删除会话“${activeDelete.resolvedTitle}”吗？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        deletingSession = null
+                        removedIds = removedIds + activeDelete.id
+                        scope.launch {
+                            runCatching { model.mutateKanbanSessionDelete(activeDelete.id) }
+                                .onFailure { model.fail(it) }
+                        }
+                    },
+                ) {
+                    Text("删除", color = colors.danger)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deletingSession = null }) {
+                    Text("取消")
+                }
+            },
+        )
+    }
+}
+
+private inline fun openSession(
+    session: KanbanSessionSummary,
+    model: CompanionModel,
+    onMarkViewedLocal: (String) -> Unit = {},
+) {
+    if (session.completesWhenViewed) {
+        onMarkViewedLocal(session.id)
+        model.markSessionViewed(session.id)
+    }
+    model.openConversation(session.id)
+}
+
+@Composable
+private fun EmptySessionsCard(isSearching: Boolean) {
+    val colors = VibexTheme.colors
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(colors.card)
+            .border(0.6.dp, colors.stroke, RoundedCornerShape(16.dp))
+            .padding(horizontal = 20.dp, vertical = 42.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.ChatBubbleOutline,
+            contentDescription = null,
+            tint = colors.textTertiary,
+            modifier = Modifier.size(32.dp),
+        )
+        Text(
+            text = if (isSearching) "没有找到匹配的会话" else "暂无会话记录",
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = colors.textPrimary,
+        )
+        Text(
+            text = if (isSearching) "请尝试更换搜索关键词或切换项目筛选" else "点击底部胶囊栏中间的 + 发起新会话",
+            fontSize = 13.sp,
+            color = colors.textSecondary,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+private fun SessionSectionBlock(
+    title: String,
+    tint: Color,
+    icon: ImageVector,
+    items: List<KanbanSessionSummary>,
+    state: UiState,
+    showStatusBadge: Boolean,
+    projectNameForWorkspace: (String) -> String?,
+    onTap: (KanbanSessionSummary) -> Unit,
+    onLongPress: (KanbanSessionSummary, Offset) -> Unit,
+) {
+    val colors = VibexTheme.colors
+    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = tint,
+                modifier = Modifier.size(14.dp),
             )
-        }
-
-        if (showFileBrowserSheet && currentWorkspace != null) {
-            FileBrowserSheet(
-                workspaceId = currentWorkspace.id,
-                title = currentProject?.name ?: currentWorkspace.name.ifBlank { "文件" },
-                model = model,
-                onDismiss = { showFileBrowserSheet = false },
+            Text(
+                text = title,
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-        }
-
-        val menuItem = state.conversations.find { it.id == menuId }
-        if (menuItem != null && state.connection.allowsWrites) {
-            ActionMenu(
-                items = listOf(
-                    ActionMenuItem(if (menuItem.pinned) "取消置顶" else "置顶") { model.pinConversation(menuItem.id, !menuItem.pinned) },
-                    ActionMenuItem("归档") { model.archiveConversation(menuItem.id) },
-                    ActionMenuItem("删除", danger = true) { model.deleteConversation(menuItem.id) },
+            Text(
+                text = "${items.size}",
+                style = TextStyle(
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    fontFeatureSettings = "tnum",
+                    color = colors.textTertiary,
                 ),
-                anchor = menuAnchor,
-                onDismiss = { menuId = null },
             )
+            Spacer(modifier = Modifier.weight(1f))
+        }
+
+        SessionCardGroup(
+            items = items,
+            state = state,
+            showStatusBadge = showStatusBadge,
+            projectNameForWorkspace = projectNameForWorkspace,
+            onTap = onTap,
+            onLongPress = onLongPress,
+        )
+    }
+}
+
+@Composable
+private fun SessionCardGroup(
+    items: List<KanbanSessionSummary>,
+    state: UiState,
+    showStatusBadge: Boolean,
+    projectNameForWorkspace: (String) -> String?,
+    onTap: (KanbanSessionSummary) -> Unit,
+    onLongPress: (KanbanSessionSummary, Offset) -> Unit,
+) {
+    val colors = VibexTheme.colors
+    val cardShape = RoundedCornerShape(16.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(cardShape)
+            .background(colors.card)
+            .border(0.6.dp, colors.stroke, cardShape),
+    ) {
+        items.forEachIndexed { idx, session ->
+            SessionRowItem(
+                session = session,
+                state = state,
+                showStatusBadge = showStatusBadge,
+                projectLabel = projectNameForWorkspace(session.workspaceId),
+                onTap = { onTap(session) },
+                onLongPress = { offset -> onLongPress(session, offset) },
+            )
+            if (idx < items.lastIndex) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(start = 56.dp),
+                    thickness = 0.5.dp,
+                    color = colors.hairline,
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun SidebarQuickNav(title: String, icon: ImageVector, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun SessionRowItem(
+    session: KanbanSessionSummary,
+    state: UiState,
+    showStatusBadge: Boolean,
+    projectLabel: String?,
+    onTap: () -> Unit,
+    onLongPress: (Offset) -> Unit,
+) {
     val colors = VibexTheme.colors
-    Column(
-        modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(colors.bg)
-            .clickable(onClick = onClick)
-            .padding(vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+    val agentKey = session.effectiveAgentKey.ifBlank { "claude_code" }
+    val agent = catalogAgent(state, agentKey)
+    val branchLabel = session.workspaceDisplayLabel
+    val showProjectLabel = !projectLabel.isNullOrBlank() && state.selectedProjectId == null
+    val displayBranchLabel = remember(branchLabel, projectLabel, showProjectLabel) {
+        if (!showProjectLabel || projectLabel.isNullOrBlank()) {
+            branchLabel
+        } else {
+            val trimmed = branchLabel.trim()
+            val prefixDot = "$projectLabel · "
+            val prefixSlash = "$projectLabel/"
+            when {
+                trimmed.equals(projectLabel, ignoreCase = true) -> ""
+                trimmed.startsWith(prefixDot, ignoreCase = true) -> trimmed.substring(prefixDot.length).trim()
+                trimmed.startsWith(prefixSlash, ignoreCase = true) -> trimmed.substring(prefixSlash.length).trim()
+                else -> trimmed
+            }
+        }
+    }
+    val relTime = remember(session.updatedAt) { relativeTime(session.updatedAt) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(longPressModifier(onClick = onTap, onLongClick = onLongPress))
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(11.dp),
     ) {
-        Icon(icon, null, tint = colors.textSecondary, modifier = Modifier.size(16.dp))
-        Text(title, fontSize = 10.5.sp, fontWeight = FontWeight.Medium, color = colors.textSecondary, maxLines = 1)
+        Box(modifier = Modifier.size(32.dp)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(colors.textPrimary.copy(alpha = 0.06f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                AgentAvatar(
+                    agentId = agentKey,
+                    size = 20.dp,
+                    iconSvg = agent?.iconSvg,
+                    displayName = agent?.displayName.orEmpty(),
+                )
+            }
+
+            val dotColor = when {
+                session.isRunning || session.status == KanbanSessionStatus.InProgress -> StatusOrange
+                session.status == KanbanSessionStatus.InReview -> StatusPurple
+                else -> null
+            }
+            if (dotColor != null) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .offset(x = 2.dp, y = 2.dp)
+                        .size(9.dp)
+                        .clip(CircleShape)
+                        .background(colors.card)
+                        .padding(1.5.dp)
+                        .clip(CircleShape)
+                        .background(dotColor),
+                )
+            }
+        }
+
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(3.5.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                if (session.isPinned) {
+                    Icon(
+                        imageVector = Icons.Rounded.PushPin,
+                        contentDescription = "已置顶",
+                        tint = StatusOrange,
+                        modifier = Modifier.size(11.dp),
+                    )
+                }
+                Text(
+                    text = session.resolvedTitle,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = colors.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                if (showProjectLabel) {
+                    Text(
+                        text = projectLabel.orEmpty(),
+                        fontSize = 12.sp,
+                        color = colors.textSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (displayBranchLabel.isNotEmpty()) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.AccountTree,
+                            contentDescription = null,
+                            tint = colors.textSecondary,
+                            modifier = Modifier.size(11.dp),
+                        )
+                        Text(
+                            text = displayBranchLabel,
+                            fontSize = 12.sp,
+                            color = colors.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                val modelLabel = session.model?.trim().orEmpty()
+                if (modelLabel.isNotEmpty()) {
+                    Text(
+                        text = "· $modelLabel",
+                        fontSize = 12.sp,
+                        color = colors.textSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+
+        Column(
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            if (relTime.isNotEmpty()) {
+                Text(
+                    text = relTime,
+                    style = TextStyle(
+                        fontSize = 11.sp,
+                        fontFeatureSettings = "tnum",
+                        color = colors.textTertiary,
+                    ),
+                )
+            }
+            if (showStatusBadge) {
+                val (badgeLabel, badgeColor) = sessionStatusBadge(session, state.manuallyCompletedSessionIds)
+                Box(
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(badgeColor.copy(alpha = 0.13f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                ) {
+                    Text(
+                        text = badgeLabel,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = badgeColor,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun sessionStatusBadge(
+    session: KanbanSessionSummary,
+    manuallyCompletedIds: Set<String>,
+): Pair<String, Color> {
+    if (session.isRunning || session.status == KanbanSessionStatus.InProgress) {
+        return "进行中" to StatusOrange
+    }
+    return when (session.status) {
+        KanbanSessionStatus.InReview -> "待检查" to StatusPurple
+        KanbanSessionStatus.Todo -> "待开始" to StatusBlue
+        KanbanSessionStatus.Done -> {
+            if (session.isRecentlyActiveReadSession(manuallyCompletedIds)) {
+                "近期对话" to StatusTeal
+            } else {
+                "已完成" to StatusGreen
+            }
+        }
+        KanbanSessionStatus.Archived -> "已归档" to Color.Gray
+        KanbanSessionStatus.InProgress -> "进行中" to StatusOrange
     }
 }
 
 fun relativeTime(raw: String): String {
-    val parsed = parseInstant(raw) ?: return ""
-    val minutes = Duration.between(parsed, Instant.now()).toMinutes().coerceAtLeast(0)
+    val epochMs = parseHostTimestampEpochMillis(raw) ?: return ""
+    val minutes = ((System.currentTimeMillis() - epochMs).coerceAtLeast(0L)) / 60_000L
     return when {
-        minutes < 1 -> "刚刚"
-        minutes < 60 -> "${minutes}m"
-        minutes < 60 * 24 -> "${minutes / 60}h"
-        else -> "${minutes / (60 * 24)}d"
+        minutes < 1L -> "刚刚"
+        minutes < 60L -> "${minutes}m"
+        minutes < 60L * 24L -> "${minutes / 60L}h"
+        else -> "${minutes / (60L * 24L)}d"
     }
-}
-
-private fun parseInstant(raw: String): Instant? {
-    if (raw.isBlank()) return null
-    return runCatching { Instant.parse(raw) }.getOrNull()
-        ?: runCatching { OffsetDateTime.parse(raw).toInstant() }.getOrNull()
 }

@@ -44,8 +44,10 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -76,8 +78,10 @@ import dev.vibex.companion.QuestionAnswer
 import dev.vibex.companion.QuestionChoice
 import dev.vibex.companion.QuestionForm
 import dev.vibex.companion.ToolStep
+import dev.vibex.companion.app.ui.theme.LocalConfirmHighRiskApproval
 import dev.vibex.companion.app.ui.theme.PlexMono
 import dev.vibex.companion.app.ui.theme.VibexTheme
+import dev.vibex.companion.app.ui.theme.l
 import dev.vibex.remote.v1.JsonValue
 
 /**
@@ -788,8 +792,71 @@ fun PermissionBanner(
     modifier: Modifier = Modifier,
 ) {
     val colors = VibexTheme.colors
+    val confirmHighRisk = LocalConfirmHighRiskApproval.current
     var expandedDiffPaths by remember(prompt.id) { mutableStateOf(setOf<String>()) }
     var scopeMenuExpanded by remember(prompt.id) { mutableStateOf(false) }
+    var pendingHighRiskChoice by remember(prompt.id) { mutableStateOf<Pair<PermissionOption?, PermissionAllowScope?>?>(null) }
+
+    val isHighRisk = remember(prompt.id, prompt.command, prompt.displayHeading, prompt.displaySubtitle) {
+        val text = listOfNotNull(prompt.command, prompt.displayHeading, prompt.displaySubtitle)
+            .joinToString(" ")
+            .lowercase()
+        val highRiskTokens = listOf(
+            "rm ", "rm -", "sudo ", "git push --force", "git push -f",
+            "git reset --hard", "git clean -", "drop ", "truncate ",
+            "delete from", "chmod ", "chown ", "kill -9", "pkill ",
+            "mkfs", "dd ", "> /dev/", "curl | sh", "curl | bash", "wget | sh",
+        )
+        highRiskTokens.any { text.contains(it) }
+    }
+
+    fun submitAllow(option: PermissionOption?, scope: PermissionAllowScope) {
+        if (confirmHighRisk && (isHighRisk || scope == PermissionAllowScope.Always)) {
+            pendingHighRiskChoice = option to scope
+        } else {
+            respond(option, scope)
+        }
+    }
+
+    pendingHighRiskChoice?.let { (option, scope) ->
+        AlertDialog(
+            onDismissRequest = { pendingHighRiskChoice = null },
+            containerColor = colors.card,
+            title = {
+                Text(
+                    l("确认执行高危操作？", "Confirm High-Risk Action?"),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary,
+                )
+            },
+            text = {
+                Text(
+                    l(
+                        "此操作可能修改系统文件、覆盖代码或赋予永久权限，请确认后再授权。",
+                        "This action may modify system files, overwrite code, or grant permanent permission. Confirm before approving.",
+                    ),
+                    fontSize = 14.sp,
+                    color = colors.textSecondary,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingHighRiskChoice = null
+                        respond(option, scope)
+                    },
+                ) {
+                    Text(l("确认允许", "Confirm Allow"), fontWeight = FontWeight.SemiBold, color = colors.danger)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingHighRiskChoice = null }) {
+                    Text(l("取消", "Cancel"), color = colors.textSecondary)
+                }
+            },
+        )
+    }
 
     val hasPreview = prompt.displaySubtitle != null ||
         prompt.command != null ||
@@ -992,7 +1059,7 @@ fun PermissionBanner(
                             .fillMaxHeight()
                             .clickable(enabled = !busy) {
                                 val option = prompt.resolveAllowOption(PermissionAllowScope.Once)
-                                respond(option, PermissionAllowScope.Once)
+                                submitAllow(option, PermissionAllowScope.Once)
                             },
                         contentAlignment = Alignment.Center,
                     ) {
@@ -1027,17 +1094,17 @@ fun PermissionBanner(
                     }
                 }
 
-                DropdownMenu(
+                VibexDropdownMenu(
                     expanded = scopeMenuExpanded,
                     onDismissRequest = { scopeMenuExpanded = false },
                 ) {
                     PermissionAllowScope.entries.forEach { scope ->
-                        DropdownMenuItem(
-                            text = { Text(scope.label, fontSize = 14.sp) },
+                        VibexDropdownMenuItem(
+                            text = scope.label,
                             onClick = {
                                 scopeMenuExpanded = false
                                 val option = prompt.resolveAllowOption(scope)
-                                respond(option, scope)
+                                submitAllow(option, scope)
                             },
                         )
                     }

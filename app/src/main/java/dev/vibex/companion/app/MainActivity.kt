@@ -18,9 +18,11 @@ import dev.vibex.companion.app.monitor.SystemIslandOverlayController
 import dev.vibex.companion.app.monitor.SystemNotifier
 import dev.vibex.companion.app.ui.CompanionApp
 import dev.vibex.companion.app.ui.theme.CompanionTheme
+import dev.vibex.companion.app.update.AppUpdateManager
 
 class MainActivity : ComponentActivity() {
     private val model: CompanionModel by viewModels()
+    private val updateManager by lazy { AppUpdateManager.getInstance(this) }
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) {}
@@ -44,6 +46,12 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         SystemIslandOverlayController.setAppForeground(this, true)
         model.onAppForegroundChanged(true)
+        updateManager.checkIfDue(fromBackground = false)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        updateManager.onActivityResumed()
     }
 
     override fun onStop() {
@@ -68,6 +76,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntentExtras(intent: Intent?) {
+        if (intent?.getBooleanExtra(AppUpdateManager.EXTRA_OPEN_UPDATE_DIALOG, false) == true) {
+            intent.removeExtra(AppUpdateManager.EXTRA_OPEN_UPDATE_DIALOG)
+            updateManager.openUpdateDialog()
+            return
+        }
         val notifAction = intent?.getStringExtra("vibex_notif_action")?.takeIf { it.isNotBlank() }
         if (notifAction != null) {
             val convId = intent.getStringExtra("vibex_notif_conv_id").orEmpty()
