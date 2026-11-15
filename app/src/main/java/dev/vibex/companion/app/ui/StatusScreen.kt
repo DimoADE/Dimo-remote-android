@@ -220,27 +220,28 @@ fun StatusScreen(
                             modifier = Modifier.size(15.dp),
                         )
                     }
-                    DropdownMenu(
+                    VibexDropdownMenu(
                         expanded = showTargetMenu,
                         onDismissRequest = { showTargetMenu = false },
                     ) {
-                        DropdownMenuItem(
-                            text = { Text("全局") },
-                            trailingIcon = if (selectedTarget == "global") {
-                                { Icon(Icons.Rounded.Check, null, tint = colors.accent, modifier = Modifier.size(16.dp)) }
-                            } else null,
+                        VibexDropdownMenuItem(
+                            text = "全局",
+                            leadingIcon = Icons.Rounded.Public,
+                            selected = selectedTarget == "global",
                             onClick = {
                                 showTargetMenu = false
                                 selectedTarget = "global"
                             },
                         )
+                        if (projects.isNotEmpty()) {
+                            VibexDropdownDivider()
+                        }
                         projects.forEach { project ->
                             val target = "project:${project.id}"
-                            DropdownMenuItem(
-                                text = { Text(project.name) },
-                                trailingIcon = if (selectedTarget == target) {
-                                    { Icon(Icons.Rounded.Check, null, tint = colors.accent, modifier = Modifier.size(16.dp)) }
-                                } else null,
+                            VibexDropdownMenuItem(
+                                text = project.name,
+                                leadingIcon = Icons.Rounded.Folder,
+                                selected = selectedTarget == target,
                                 onClick = {
                                     showTargetMenu = false
                                     selectedTarget = target

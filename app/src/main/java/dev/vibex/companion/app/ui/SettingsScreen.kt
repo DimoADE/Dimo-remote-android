@@ -1,6 +1,7 @@
 package dev.vibex.companion.app.ui
 
 import android.os.Build
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Cancel
+import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.Contrast
 import androidx.compose.material.icons.rounded.DeleteOutline
@@ -35,9 +37,12 @@ import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.LaptopMac
 import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.NotificationsOff
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -63,6 +68,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -74,6 +80,7 @@ import dev.vibex.companion.ExtensionCatalogItem
 import dev.vibex.companion.SubagentRoleItem
 import dev.vibex.companion.agentDisplayName
 import dev.vibex.companion.app.CompanionModel
+import dev.vibex.companion.app.R
 import dev.vibex.companion.app.SettingsSection
 import dev.vibex.companion.app.UiState
 import dev.vibex.companion.app.data.CollapseDisplay
@@ -82,9 +89,11 @@ import dev.vibex.companion.app.data.MessageStreamDisplay
 import dev.vibex.companion.app.data.ThinkingDisplay
 import dev.vibex.companion.app.data.VibeXAccountRepository
 import dev.vibex.companion.app.monitor.CompanionMonitorService
+import dev.vibex.companion.app.ui.theme.AppLanguage
 import dev.vibex.companion.app.ui.theme.Appearance
 import dev.vibex.companion.app.ui.theme.PlexMono
 import dev.vibex.companion.app.ui.theme.VibexTheme
+import dev.vibex.companion.app.ui.theme.l
 import dev.vibex.companion.app.update.AppUpdateManager
 
 @Composable
@@ -99,13 +108,13 @@ fun SettingsScreen(
 ) {
     when (section) {
         null -> SettingsIndex(state, model, onOpen)
-        SettingsSection.Profile -> SettingsPage("个人资料", onBack) { ProfileSettings(state) }
-        SettingsSection.Account -> SettingsPage("VibeX 账号", onBack) { AccountSettings(state, model, onOpen) }
-        SettingsSection.Connection -> SettingsPage("已配对的电脑", onBack) { ConnectionSettings(state, model, onScan, onManualPair) }
-        SettingsSection.Extensions -> SettingsPage("技能与扩展", onBack) { ExtensionsSettings(state, model) }
-        SettingsSection.Font -> SettingsPage("字体", onBack) { FontSettings(state, model) }
-        SettingsSection.Notification -> SettingsPage("通知", onBack) { NotificationSettings(state, model) }
-        SettingsSection.About -> SettingsPage("关于 VibeX", onBack) { AboutSettings(state) }
+        SettingsSection.Profile -> SettingsPage(l("个人资料", "Profile"), onBack) { ProfileSettings(state) }
+        SettingsSection.Account -> SettingsPage(l("VibeX 账号", "VibeX Account"), onBack) { AccountSettings(state, model, onOpen) }
+        SettingsSection.Connection -> SettingsPage(l("已配对的电脑", "Paired Computers"), onBack) { ConnectionSettings(state, model, onScan, onManualPair) }
+        SettingsSection.Extensions -> SettingsPage(l("技能与扩展", "Skills & Extensions"), onBack) { ExtensionsSettings(state, model) }
+        SettingsSection.Font -> SettingsPage(l("字体", "Font"), onBack) { FontSettings(state, model) }
+        SettingsSection.Notification -> SettingsPage(l("通知", "Notifications"), onBack) { NotificationSettings(state, model) }
+        SettingsSection.About -> SettingsPage(l("关于 Dimo", "About Dimo"), onBack) { AboutSettings(state) }
     }
 }
 
@@ -137,7 +146,7 @@ private fun SettingsIndex(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    "设置",
+                    l("设置", "Settings"),
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
                     color = colors.textPrimary,
@@ -161,7 +170,7 @@ private fun SettingsIndex(
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(
-                                if (state.accountSignedIn && accountUser != null) accountUser.resolvedDisplayName else "VibeX 账号",
+                                if (state.accountSignedIn && accountUser != null) accountUser.resolvedDisplayName else l("VibeX 账号", "VibeX Account"),
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = colors.textPrimary,
@@ -181,17 +190,22 @@ private fun SettingsIndex(
                                 )
                             } else {
                                 Text(
-                                    "未登录",
-                                    fontSize = 12.sp,
-                                    color = colors.textTertiary,
+                                    l("去登录", "Sign In"),
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colors.accent,
+                                    modifier = Modifier
+                                        .clip(CircleShape)
+                                        .background(colors.accentDim)
+                                        .padding(horizontal = 8.dp, vertical = 2.dp),
                                 )
                             }
                         }
                         Text(
                             if (state.accountSignedIn && accountUser != null && accountUser.email.isNotBlank()) {
-                                "${accountUser.email} · 个人中心与云端同步"
+                                "${accountUser.email} · ${l("个人中心与云端同步", "Profile & Cloud Sync")}"
                             } else {
-                                "登录以跨端同步电脑、查看订阅与模型额度"
+                                l("跨端同步电脑与模型额度", "Sync desktops & model credits")
                             },
                             fontSize = 12.5.sp,
                             color = colors.textSecondary,
@@ -218,17 +232,17 @@ private fun SettingsIndex(
                         .substringBefore(":")
                         .ifBlank { "127.0.0.1" }
                     if (isCloudActive) {
-                        "VibeX 云服务 · Beta"
+                        l("VibeX 云中继 · Beta", "VibeX Cloud Relay · Beta")
                     } else {
-                        "局域网直连 · $hostAddr"
+                        "${l("局域网直连", "Direct LAN")} · $hostAddr"
                     }
                 } else {
-                    "扫码或输入连接码"
+                    l("扫码或输入连接码", "Scan QR or enter pairing code")
                 }
                 IosSettingsRow(
                     icon = Icons.Rounded.Computer,
                     tint = Color(0xFF007AFF),
-                    title = "已配对的电脑",
+                    title = l("已配对的电脑", "Paired Computers"),
                     subtitle = hostSub,
                     trailing = {
                         val badgeColor = when (state.connection) {
@@ -238,10 +252,10 @@ private fun SettingsIndex(
                             else -> colors.textTertiary
                         }
                         val badgeText = when {
-                            selected == null -> "未连接"
+                            selected == null -> l("未连接", "Offline")
                             state.connection == ConnectionState.Online -> {
                                 val rtt = state.realtimeRttMs?.let { " · ${it}ms" }.orEmpty()
-                                "已连接$rtt"
+                                "${l("已连接", "Connected")}$rtt"
                             }
                             else -> connectionLabel(state.connection)
                         }
@@ -266,14 +280,14 @@ private fun SettingsIndex(
                 IosSettingsRow(
                     icon = Icons.Rounded.AutoAwesome,
                     tint = Color(0xFFAF52DE),
-                    title = "技能与扩展",
-                    subtitle = "技能 · MCP · 插件",
+                    title = l("技能与扩展", "Skills & Extensions"),
+                    subtitle = l("技能 · MCP · 插件", "Skills · MCP · Plugins"),
                     onClick = { onOpen(SettingsSection.Extensions) },
                 )
             }
         }
 
-        // 3. Theme, Font, Notifications Card (1:1 with iOS screenshot)
+        // 3. Theme, Language, Font, Notifications Card
         item {
             IosSettingsCard {
                 // Inline Theme Segmented Row
@@ -286,7 +300,7 @@ private fun SettingsIndex(
                 ) {
                     ColoredIconBadge(Icons.Rounded.Contrast, Color(0xFF5856D6))
                     Text(
-                        "主题",
+                        l("主题", "Theme"),
                         fontSize = 15.5.sp,
                         fontWeight = FontWeight.Medium,
                         color = colors.textPrimary,
@@ -300,9 +314,9 @@ private fun SettingsIndex(
                         horizontalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
                         listOf(
-                            Appearance.System to "跟随系统",
-                            Appearance.Light to "浅色",
-                            Appearance.Dark to "深色",
+                            Appearance.System to l("自动", "Auto"),
+                            Appearance.Light to l("浅色", "Light"),
+                            Appearance.Dark to l("深色", "Dark"),
                         ).forEach { (mode, label) ->
                             val active = state.appearance == mode
                             Text(
@@ -318,6 +332,53 @@ private fun SettingsIndex(
                                     .clip(RoundedCornerShape(7.dp))
                                     .background(if (active) colors.segmentedThumb else Color.Transparent)
                                     .clickable { model.setAppearance(mode) }
+                                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                            )
+                        }
+                    }
+                }
+                HorizontalDivider(color = colors.hairline, modifier = Modifier.padding(start = 56.dp))
+                // Inline Language Segmented Row
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    ColoredIconBadge(Icons.Rounded.Language, Color(0xFF007AFF))
+                    Text(
+                        l("语言", "Language"),
+                        fontSize = 15.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = colors.textPrimary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(9.dp))
+                            .background(colors.segmentedTrack)
+                            .padding(3.dp),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        listOf(
+                            AppLanguage.ZhHans to "简体中文",
+                            AppLanguage.En to "English",
+                        ).forEach { (lang, label) ->
+                            val active = state.language == lang
+                            Text(
+                                label,
+                                fontSize = 12.5.sp,
+                                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
+                                color = if (active) colors.textPrimary else colors.textSecondary,
+                                modifier = Modifier
+                                    .then(
+                                        if (active) Modifier.shadow(2.dp, RoundedCornerShape(7.dp), ambientColor = Color.Black.copy(0.08f))
+                                        else Modifier,
+                                    )
+                                    .clip(RoundedCornerShape(7.dp))
+                                    .background(if (active) colors.segmentedThumb else Color.Transparent)
+                                    .clickable { model.setLanguage(lang) }
                                     .padding(horizontal = 10.dp, vertical = 5.dp),
                             )
                         }
@@ -343,10 +404,10 @@ private fun SettingsIndex(
                         Text("AA", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFF9500))
                     }
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("字体", fontSize = 15.5.sp, fontWeight = FontWeight.Medium, color = colors.textPrimary)
-                        Text("字号大小与字体样式", fontSize = 12.sp, color = colors.textSecondary)
+                        Text(l("字体", "Font"), fontSize = 15.5.sp, fontWeight = FontWeight.Medium, color = colors.textPrimary)
+                        Text(l("字号大小与字体样式", "Text size & style"), fontSize = 12.sp, color = colors.textSecondary)
                     }
-                    Text("系统默认 · 标准", fontSize = 13.sp, color = colors.textSecondary)
+                    Text(l("系统默认 · 标准", "System · Standard"), fontSize = 13.sp, color = colors.textSecondary)
                     Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = colors.textTertiary, modifier = Modifier.size(18.dp))
                 }
                 HorizontalDivider(color = colors.hairline, modifier = Modifier.padding(start = 56.dp))
@@ -354,11 +415,11 @@ private fun SettingsIndex(
                 IosSettingsRow(
                     icon = Icons.Rounded.NotificationsActive,
                     tint = Color(0xFFFF3B30),
-                    title = "通知",
-                    subtitle = "任务完成、审批与协作消息提醒",
+                    title = l("通知", "Notifications"),
+                    subtitle = l("任务完成、审批与协作消息提醒", "Task, approval & collaboration alerts"),
                     trailing = {
                         Text(
-                            if (state.monitor) "持续监控已开启" else "系统通知已开启",
+                            if (state.monitor) l("持续监控已开启", "Monitor On") else l("系统通知已开启", "System On"),
                             fontSize = 13.sp,
                             color = colors.textSecondary,
                         )
@@ -368,18 +429,38 @@ private fun SettingsIndex(
             }
         }
 
-        // 4. About & Version Card (1:1 with iOS screenshot)
+        // 4. Cache & About Card (1:1 with iOS)
         item {
             val context = LocalContext.current
             val updateManager = remember(context) { AppUpdateManager.getInstance(context) }
             val updateState by updateManager.state.collectAsState()
+            var cacheBytes by remember { mutableStateOf(computeAndroidCacheBytes(context)) }
+            var cacheCleared by remember { mutableStateOf(false) }
             IosSettingsCard {
+                IosSettingsRow(
+                    icon = Icons.Rounded.DeleteOutline,
+                    tint = Color(0xFFFF9500),
+                    title = l("清理缓存", "Clear Cache"),
+                    trailing = {
+                        Text(
+                            text = if (cacheCleared) l("已清理", "Cleared") else formatCacheSize(cacheBytes),
+                            fontSize = 13.sp,
+                            color = if (cacheCleared) Color(0xFF34C759) else colors.textSecondary,
+                        )
+                    },
+                    onClick = {
+                        clearAndroidCache(context)
+                        cacheBytes = computeAndroidCacheBytes(context)
+                        cacheCleared = true
+                    },
+                )
+                HorizontalDivider(color = colors.hairline, modifier = Modifier.padding(start = 56.dp))
                 IosSettingsRow(
                     icon = Icons.Rounded.Info,
                     tint = Color(0xFF30B0C7),
-                    title = "关于 VibeX",
+                    title = l("关于 Dimo", "About Dimo"),
                     trailing = {
-                        Text("本地优先 AI 研发平台", fontSize = 13.sp, color = colors.textSecondary)
+                        Text("v${updateState.currentVersionName}", fontSize = 13.sp, color = colors.textSecondary)
                     },
                     onClick = { onOpen(SettingsSection.About) },
                 )
@@ -600,7 +681,7 @@ private fun LazyListScope.ConnectionSettings(
         var detailProfile by remember { mutableStateOf<HostProfile?>(null) }
 
         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            GroupLabel("连接偏好")
+            GroupLabel(l("连接偏好", "Connection Preferences"))
             IosSettingsCard {
                 Row(
                     Modifier
@@ -609,13 +690,79 @@ private fun LazyListScope.ConnectionSettings(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("自动连接已配对电脑", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = colors.textPrimary)
-                        Text("打开应用或断开后自动重连已配对电脑", fontSize = 12.sp, color = colors.textSecondary)
+                        Text(l("自动连接已配对电脑", "Auto-Connect Paired Computers"), fontSize = 15.sp, fontWeight = FontWeight.Medium, color = colors.textPrimary)
+                        Text(l("打开应用或断开后自动重连已配对电脑", "Automatically reconnect when opening or resuming"), fontSize = 12.sp, color = colors.textSecondary)
                     }
                     Switch(
                         checked = state.autoConnect,
                         onCheckedChange = { model.setAutoConnect(it) },
                     )
+                }
+            }
+
+            GroupLabel(l("自建云节点（可选）", "Custom Cloud Node (Optional)"))
+            IosSettingsCard {
+                var nodeDraft by rememberSaveable(state.customRelayOrigin) { mutableStateOf(state.customRelayOrigin) }
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        ColoredIconBadge(Icons.Rounded.Cloud, Color(0xFF007AFF))
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(l("自建节点地址", "Custom Node URL"), fontSize = 15.sp, fontWeight = FontWeight.Medium, color = colors.textPrimary)
+                            Text(
+                                l("填写后，扫码时将询问使用官方云服务或自建节点", "When set, scanning QR will ask between official cloud and your node"),
+                                fontSize = 12.sp,
+                                color = colors.textSecondary,
+                            )
+                        }
+                    }
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(colors.bg)
+                            .border(0.6.dp, colors.hairline, RoundedCornerShape(10.dp))
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                    ) {
+                        if (nodeDraft.isEmpty()) {
+                            Text("https://relay.example.com", fontSize = 13.5.sp, fontFamily = PlexMono, color = colors.textTertiary)
+                        }
+                        BasicTextField(
+                            value = nodeDraft,
+                            onValueChange = { nodeDraft = it },
+                            singleLine = true,
+                            textStyle = TextStyle(fontSize = 13.5.sp, fontFamily = PlexMono, color = colors.textPrimary),
+                            cursorBrush = SolidColor(colors.accent),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        if (state.customRelayOrigin.isNotBlank() || nodeDraft.isNotBlank()) {
+                            TextButton(
+                                onClick = {
+                                    nodeDraft = ""
+                                    model.setCustomRelayOrigin("")
+                                },
+                            ) {
+                                Text(l("清除", "Clear"), color = colors.danger, fontSize = 13.sp)
+                            }
+                        }
+                        TextButton(
+                            onClick = { model.setCustomRelayOrigin(nodeDraft) },
+                        ) {
+                            Text(l("保存节点", "Save Node"), color = colors.accent, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        }
+                    }
                 }
             }
 
@@ -1202,8 +1349,8 @@ private fun LazyListScope.NotificationSettings(state: UiState, model: CompanionM
             ) {
                 ColoredIconBadge(Icons.Rounded.NotificationsActive, Color(0xFFFF3B30))
                 Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("后台持续监控通知", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = colors.textPrimary)
-                    Text("保持与桌面端长连接并推送审批与完成提醒", fontSize = 12.sp, color = colors.textSecondary)
+                    Text(l("后台持续监控通知", "Background Monitor Notifications"), fontSize = 15.sp, fontWeight = FontWeight.Medium, color = colors.textPrimary)
+                    Text(l("保持与桌面端长连接并推送审批与完成提醒", "Keep connection alive & push approval/completion alerts"), fontSize = 12.sp, color = colors.textSecondary)
                 }
                 Switch(
                     checked = state.monitor,
@@ -1211,6 +1358,36 @@ private fun LazyListScope.NotificationSettings(state: UiState, model: CompanionM
                         model.setMonitor(it)
                         if (it) CompanionMonitorService.start(context) else CompanionMonitorService.stop(context)
                     },
+                )
+            }
+            HorizontalDivider(color = colors.hairline, modifier = Modifier.padding(start = 56.dp))
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ColoredIconBadge(Icons.Rounded.NotificationsOff, Color(0xFF5856D6))
+                Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(l("前台静默", "Mute Foreground Alerts"), fontSize = 15.sp, fontWeight = FontWeight.Medium, color = colors.textPrimary)
+                    Text(l("正在 App 内查看时，不重复弹系统横幅通知", "Suppress duplicate system banners while app is in foreground"), fontSize = 12.sp, color = colors.textSecondary)
+                }
+                Switch(
+                    checked = state.muteForegroundNotifications,
+                    onCheckedChange = { model.setMuteForegroundNotifications(it) },
+                )
+            }
+            HorizontalDivider(color = colors.hairline, modifier = Modifier.padding(start = 56.dp))
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ColoredIconBadge(Icons.Rounded.Shield, Color(0xFFFF9500))
+                Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(l("高危审批保护", "High-Risk Approval Guard"), fontSize = 15.sp, fontWeight = FontWeight.Medium, color = colors.textPrimary)
+                    Text(l("遇到删除/强推/永久授权操作时弹出二次确认", "Require secondary confirmation for destructive or permanent approvals"), fontSize = 12.sp, color = colors.textSecondary)
+                }
+                Switch(
+                    checked = state.confirmHighRiskApproval,
+                    onCheckedChange = { model.setConfirmHighRiskApproval(it) },
                 )
             }
         }
@@ -1229,16 +1406,23 @@ private fun LazyListScope.AboutSettings(state: UiState) {
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                BrandMark(56.dp)
-                Text("VibeX Companion", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.textPrimary)
+                Image(
+                    painter = painterResource(R.drawable.dimo_app_icon),
+                    contentDescription = "Dimo",
+                    modifier = Modifier
+                        .size(68.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .border(0.6.dp, colors.stroke, RoundedCornerShape(16.dp)),
+                )
+                Text("Dimo", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = colors.textPrimary)
                 Text(
-                    "客户端 v${updateState.currentVersionName} (#${updateState.currentVersionCode}) · 协议 v${state.hostProtocol.ifBlank { "1.0" }}",
+                    "客户端 v${updateState.currentVersionName} (#${updateState.currentVersionCode})",
                     fontSize = 13.sp,
                     fontFamily = PlexMono,
                     color = colors.textSecondary,
                 )
                 Text(
-                    "本地优先 AI 协同工作流与多智能体研发平台移动伴侣端",
+                    "VibeX 桌面端伴侣客户端",
                     fontSize = 12.5.sp,
                     color = colors.textTertiary,
                     textAlign = TextAlign.Center,
@@ -1251,6 +1435,30 @@ private fun LazyListScope.AboutSettings(state: UiState) {
             }
         }
     }
+}
+
+private fun computeAndroidCacheBytes(context: android.content.Context): Long {
+    fun dirSize(dir: java.io.File?): Long {
+        if (dir == null || !dir.exists()) return 0L
+        return dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+    }
+    return dirSize(context.cacheDir) + dirSize(context.externalCacheDir)
+}
+
+private fun clearAndroidCache(context: android.content.Context) {
+    fun clearDir(dir: java.io.File?) {
+        dir?.listFiles()?.forEach { it.deleteRecursively() }
+    }
+    clearDir(context.cacheDir)
+    clearDir(context.externalCacheDir)
+}
+
+private fun formatCacheSize(bytes: Long): String {
+    if (bytes <= 0L) return "0 KB"
+    val kb = bytes / 1024.0
+    if (kb < 1024.0) return String.format(java.util.Locale.US, "%.0f KB", kb)
+    val mb = kb / 1024.0
+    return String.format(java.util.Locale.US, "%.1f MB", mb)
 }
 
 @Composable

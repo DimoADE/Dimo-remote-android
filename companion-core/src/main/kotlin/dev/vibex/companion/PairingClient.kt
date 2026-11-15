@@ -541,8 +541,8 @@ class UrlConnectionTransport : HttpTransport {
         }
 
         val connection = URI(url).toURL().openConnection() as HttpURLConnection
-        connection.connectTimeout = if (isPrivateLan) 2_200 else 10_000
-        connection.readTimeout = if (isPrivateLan) 4_000 else 20_000
+        connection.connectTimeout = if (isPrivateLan) 2_500 else 10_000
+        connection.readTimeout = if (isPrivateLan) 15_000 else 20_000
         connection.requestMethod = method
         connection.doInput = true
         val mutableHeaders = LinkedHashMap(headers)

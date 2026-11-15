@@ -61,6 +61,7 @@ import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.PersonRemove
 import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Shield
@@ -315,30 +316,27 @@ fun CollaborationScreen(
                             modifier = Modifier.size(15.dp),
                         )
                     }
-                    DropdownMenu(
+                    VibexDropdownMenu(
                         expanded = showProjectMenu,
                         onDismissRequest = { showProjectMenu = false },
                     ) {
-                        DropdownMenuItem(
-                            text = { Text("全局") },
-                            trailingIcon = {
-                                if (state.selectedProjectId == null) {
-                                    Icon(Icons.Outlined.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-                                }
-                            },
+                        VibexDropdownMenuItem(
+                            text = "全局",
+                            leadingIcon = Icons.Outlined.Public,
+                            selected = state.selectedProjectId == null,
                             onClick = {
                                 showProjectMenu = false
                                 model.selectProjectInPlace(null)
                             },
                         )
+                        if (state.catalog?.projects.orEmpty().isNotEmpty()) {
+                            VibexDropdownDivider()
+                        }
                         state.catalog?.projects.orEmpty().forEach { project ->
-                            DropdownMenuItem(
-                                text = { Text(project.name) },
-                                trailingIcon = {
-                                    if (state.selectedProjectId == project.id) {
-                                        Icon(Icons.Outlined.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    }
-                                },
+                            VibexDropdownMenuItem(
+                                text = project.name,
+                                leadingIcon = Icons.Outlined.Folder,
+                                selected = state.selectedProjectId == project.id,
                                 onClick = {
                                     showProjectMenu = false
                                     model.selectProjectInPlace(project.id)
@@ -369,40 +367,40 @@ fun CollaborationScreen(
                             Icon(Icons.Outlined.Add, contentDescription = "新建", tint = c.textPrimary, modifier = Modifier.size(18.dp))
                         }
                     }
-                    DropdownMenu(
+                    VibexDropdownMenu(
                         expanded = showAddMenu,
                         onDismissRequest = { showAddMenu = false },
                     ) {
-                        DropdownMenuItem(
-                            text = { Text("新建助手") },
-                            leadingIcon = { Icon(Icons.Outlined.SmartToy, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        VibexDropdownMenuItem(
+                            text = "新建助手",
+                            leadingIcon = Icons.Outlined.SmartToy,
                             onClick = {
                                 showAddMenu = false
                                 showCreateAssistantSheet = true
                             },
                         )
-                        DropdownMenuItem(
-                            text = { Text("新建群组") },
-                            leadingIcon = { Icon(Icons.Outlined.Groups, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        VibexDropdownMenuItem(
+                            text = "新建群组",
+                            leadingIcon = Icons.Outlined.Groups,
                             onClick = {
                                 showAddMenu = false
                                 newGroupName = ""
                                 showCreateGroupAlert = true
                             },
                         )
-                        DropdownMenuItem(
-                            text = { Text("新建联系人分组") },
-                            leadingIcon = { Icon(Icons.Outlined.CreateNewFolder, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        VibexDropdownMenuItem(
+                            text = "新建联系人分组",
+                            leadingIcon = Icons.Outlined.CreateNewFolder,
                             onClick = {
                                 showAddMenu = false
                                 newContactGroupName = ""
                                 showCreateContactGroupAlert = true
                             },
                         )
-                        HorizontalDivider()
-                        DropdownMenuItem(
-                            text = { Text("角色与团队管理") },
-                            leadingIcon = { Icon(Icons.Outlined.Shield, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        VibexDropdownDivider()
+                        VibexDropdownMenuItem(
+                            text = "角色与团队管理",
+                            leadingIcon = Icons.Outlined.Shield,
                             onClick = {
                                 showAddMenu = false
                                 showRolesAndTeamsSheet = true
@@ -627,22 +625,23 @@ fun CollaborationScreen(
                                             ) {
                                                 Icon(Icons.Outlined.MoreHoriz, contentDescription = null, tint = c.textSecondary, modifier = Modifier.size(16.dp))
                                             }
-                                            DropdownMenu(
+                                            VibexDropdownMenu(
                                                 expanded = showGroupMenu,
                                                 onDismissRequest = { showGroupMenu = false },
                                             ) {
-                                                DropdownMenuItem(
-                                                    text = { Text("重命名分组") },
-                                                    leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null, modifier = Modifier.size(17.dp)) },
+                                                VibexDropdownMenuItem(
+                                                    text = "重命名分组",
+                                                    leadingIcon = Icons.Outlined.Edit,
                                                     onClick = {
                                                         showGroupMenu = false
                                                         renameContactGroupText = group.name
                                                         renamingContactGroup = group
                                                     },
                                                 )
-                                                DropdownMenuItem(
-                                                    text = { Text("删除分组", color = c.danger) },
-                                                    leadingIcon = { Icon(Icons.Outlined.DeleteOutline, contentDescription = null, tint = c.danger, modifier = Modifier.size(17.dp)) },
+                                                VibexDropdownMenuItem(
+                                                    text = "删除分组",
+                                                    leadingIcon = Icons.Outlined.DeleteOutline,
+                                                    tint = c.danger,
                                                     onClick = {
                                                         showGroupMenu = false
                                                         scope.launch {
@@ -1264,23 +1263,23 @@ private fun CollabContactRow(
             }
         }
 
-        DropdownMenu(
+        VibexDropdownMenu(
             expanded = showMenu,
             onDismissRequest = { showMenu = false },
         ) {
             if (item.unreadCount > 0) {
-                DropdownMenuItem(
-                    text = { Text("标为已读") },
-                    leadingIcon = { Icon(Icons.Outlined.MarkChatRead, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                VibexDropdownMenuItem(
+                    text = "标为已读",
+                    leadingIcon = Icons.Outlined.MarkChatRead,
                     onClick = {
                         showMenu = false
                         onMarkRead(true)
                     },
                 )
             } else {
-                DropdownMenuItem(
-                    text = { Text("标为未读") },
-                    leadingIcon = { Icon(Icons.Outlined.MarkChatUnread, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                VibexDropdownMenuItem(
+                    text = "标为未读",
+                    leadingIcon = Icons.Outlined.MarkChatUnread,
                     onClick = {
                         showMenu = false
                         onMarkRead(false)
@@ -1291,15 +1290,9 @@ private fun CollabContactRow(
             if (!item.isGroup && item.member != null) {
                 val member = item.member!!
                 val nextSup = !member.isSupervisor
-                DropdownMenuItem(
-                    text = { Text(if (nextSup) "设为主管" else "取消主管身份") },
-                    leadingIcon = {
-                        Icon(
-                            if (nextSup) Icons.Outlined.Star else Icons.Outlined.StarOutline,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    },
+                VibexDropdownMenuItem(
+                    text = if (nextSup) "设为主管" else "取消主管身份",
+                    leadingIcon = if (nextSup) Icons.Outlined.Star else Icons.Outlined.StarOutline,
                     onClick = {
                         showMenu = false
                         onToggleSupervisor(member.resolvedIdentityId, nextSup)
@@ -1308,27 +1301,20 @@ private fun CollabContactRow(
             }
 
             if (item.isGroup) {
-                HorizontalDivider()
+                VibexDropdownDivider()
                 CollabTagPalette.presets.forEach { tag ->
-                    DropdownMenuItem(
-                        text = { Text("标签颜色：${tag.label}") },
-                        leadingIcon = {
-                            Box(
-                                modifier = Modifier
-                                    .size(12.dp)
-                                    .clip(CircleShape)
-                                    .background(tag.color),
-                            )
-                        },
+                    VibexDropdownMenuItem(
+                        text = "标签颜色：${tag.label}",
+                        leadingDotColor = tag.color,
                         onClick = {
                             showMenu = false
                             onUpdateSpaceTagColor(item.targetSpaceId, tag.id)
                         },
                     )
                 }
-                DropdownMenuItem(
-                    text = { Text("清除标签颜色") },
-                    leadingIcon = { Icon(Icons.Outlined.Palette, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                VibexDropdownMenuItem(
+                    text = "清除标签颜色",
+                    leadingIcon = Icons.Outlined.Palette,
                     onClick = {
                         showMenu = false
                         onUpdateSpaceTagColor(item.targetSpaceId, null)
@@ -1337,20 +1323,20 @@ private fun CollabContactRow(
             }
 
             if (contactGroups.isNotEmpty()) {
-                HorizontalDivider()
+                VibexDropdownDivider()
                 contactGroups.forEach { group ->
-                    DropdownMenuItem(
-                        text = { Text("移至分组：${group.name}") },
-                        leadingIcon = { Icon(Icons.Outlined.Folder, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    VibexDropdownMenuItem(
+                        text = "移至分组：${group.name}",
+                        leadingIcon = Icons.Outlined.Folder,
                         onClick = {
                             showMenu = false
                             onMoveToContactGroup(group.groupId)
                         },
                     )
                 }
-                DropdownMenuItem(
-                    text = { Text("移出分组（未分组）") },
-                    leadingIcon = { Icon(Icons.Outlined.Close, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                VibexDropdownMenuItem(
+                    text = "移出分组（未分组）",
+                    leadingIcon = Icons.Outlined.Close,
                     onClick = {
                         showMenu = false
                         onMoveToContactGroup(null)
@@ -1358,10 +1344,11 @@ private fun CollabContactRow(
                 )
             }
 
-            HorizontalDivider()
-            DropdownMenuItem(
-                text = { Text(if (item.isGroup) "删除群组" else "删除助手", color = c.danger) },
-                leadingIcon = { Icon(Icons.Outlined.DeleteOutline, contentDescription = null, tint = c.danger, modifier = Modifier.size(18.dp)) },
+            VibexDropdownDivider()
+            VibexDropdownMenuItem(
+                text = if (item.isGroup) "删除群组" else "删除助手",
+                leadingIcon = Icons.Outlined.DeleteOutline,
+                tint = c.danger,
                 onClick = {
                     showMenu = false
                     onDelete()
@@ -2066,7 +2053,7 @@ private fun CollaborationChatView(
                                 }
                             }
                         }
-                        DropdownMenu(
+                        VibexDropdownMenu(
                             expanded = showDelayMenu,
                             onDismissRequest = { showDelayMenu = false },
                         ) {
@@ -2077,13 +2064,9 @@ private fun CollaborationChatView(
                                 300 to "5 分钟后",
                                 900 to "15 分钟后",
                             ).forEach { (sec, label) ->
-                                DropdownMenuItem(
-                                    text = { Text(label) },
-                                    trailingIcon = {
-                                        if (delaySeconds == sec) {
-                                            Icon(Icons.Outlined.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-                                        }
-                                    },
+                                VibexDropdownMenuItem(
+                                    text = label,
+                                    selected = delaySeconds == sec,
                                     onClick = {
                                         delaySeconds = sec
                                         showDelayMenu = false
@@ -2302,7 +2285,7 @@ private fun CollabMessageRow(
                     )
                 }
 
-                DropdownMenu(
+                VibexDropdownMenu(
                     expanded = showMenu,
                     onDismissRequest = { showMenu = false },
                 ) {
@@ -2321,43 +2304,43 @@ private fun CollabMessageRow(
                             )
                         }
                     }
-                    HorizontalDivider()
-                    DropdownMenuItem(
-                        text = { Text("回复") },
-                        leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Reply, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    VibexDropdownDivider()
+                    VibexDropdownMenuItem(
+                        text = "回复",
+                        leadingIcon = Icons.AutoMirrored.Outlined.Reply,
                         onClick = {
                             showMenu = false
                             onReply()
                         },
                     )
-                    DropdownMenuItem(
-                        text = { Text("复制内容") },
-                        leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    VibexDropdownMenuItem(
+                        text = "复制内容",
+                        leadingIcon = Icons.Outlined.ContentCopy,
                         onClick = {
                             showMenu = false
                             onCopy()
                         },
                     )
-                    DropdownMenuItem(
-                        text = { Text("加入空间收藏") },
-                        leadingIcon = { Icon(Icons.Outlined.BookmarkBorder, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    VibexDropdownMenuItem(
+                        text = "加入空间收藏",
+                        leadingIcon = Icons.Outlined.BookmarkBorder,
                         onClick = {
                             showMenu = false
                             onCollect()
                         },
                     )
-                    DropdownMenuItem(
-                        text = { Text("提炼到空间记忆") },
-                        leadingIcon = { Icon(Icons.Outlined.Psychology, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    VibexDropdownMenuItem(
+                        text = "提炼到空间记忆",
+                        leadingIcon = Icons.Outlined.Psychology,
                         onClick = {
                             showMenu = false
                             onDistill()
                         },
                     )
                     if (!message.isFromUser && !message.envelope.isSystem) {
-                        DropdownMenuItem(
-                            text = { Text("打开该助手会话") },
-                            leadingIcon = { Icon(Icons.Outlined.Terminal, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                        VibexDropdownMenuItem(
+                            text = "打开该助手会话",
+                            leadingIcon = Icons.Outlined.Terminal,
                             onClick = {
                                 showMenu = false
                                 onAvatarTap()
@@ -2712,13 +2695,13 @@ private fun CollaborationDetailSheet(
                                                 IconButton(onClick = { showMemberMenu = true }, modifier = Modifier.size(28.dp)) {
                                                     Icon(Icons.Outlined.MoreHoriz, contentDescription = null, tint = c.textSecondary, modifier = Modifier.size(18.dp))
                                                 }
-                                                DropdownMenu(
+                                                VibexDropdownMenu(
                                                     expanded = showMemberMenu,
                                                     onDismissRequest = { showMemberMenu = false },
                                                 ) {
-                                                    DropdownMenuItem(
-                                                        text = { Text("查看本群会话") },
-                                                        leadingIcon = { Icon(Icons.Outlined.Terminal, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                                                    VibexDropdownMenuItem(
+                                                        text = "查看本群会话",
+                                                        leadingIcon = Icons.Outlined.Terminal,
                                                         onClick = {
                                                             showMemberMenu = false
                                                             scope.launch {
@@ -2731,9 +2714,9 @@ private fun CollaborationDetailSheet(
                                                         },
                                                     )
                                                     val isLead = leadMemberId == member.resolvedIdentityId
-                                                    DropdownMenuItem(
-                                                        text = { Text(if (isLead) "取消群负责人" else "设为群负责人") },
-                                                        leadingIcon = { Icon(Icons.Outlined.Star, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                                                    VibexDropdownMenuItem(
+                                                        text = if (isLead) "取消群负责人" else "设为群负责人",
+                                                        leadingIcon = Icons.Outlined.Star,
                                                         onClick = {
                                                             showMemberMenu = false
                                                             val nextLead = if (isLead) null else member.resolvedIdentityId
@@ -2749,10 +2732,11 @@ private fun CollaborationDetailSheet(
                                                             }
                                                         },
                                                     )
-                                                    HorizontalDivider()
-                                                    DropdownMenuItem(
-                                                        text = { Text("移出本群", color = c.danger) },
-                                                        leadingIcon = { Icon(Icons.Outlined.PersonRemove, contentDescription = null, tint = c.danger, modifier = Modifier.size(18.dp)) },
+                                                    VibexDropdownDivider()
+                                                    VibexDropdownMenuItem(
+                                                        text = "移出本群",
+                                                        leadingIcon = Icons.Outlined.PersonRemove,
+                                                        tint = c.danger,
                                                         onClick = {
                                                             showMemberMenu = false
                                                             scope.launch {

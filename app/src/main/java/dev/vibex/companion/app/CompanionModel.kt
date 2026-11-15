@@ -112,6 +112,7 @@ import dev.vibex.companion.app.monitor.SystemNotificationAction
 import dev.vibex.companion.app.monitor.SystemNotifier
 import dev.vibex.companion.app.monitor.TaskLiveActivityState
 import dev.vibex.companion.app.monitor.VibeXActivityPhase
+import dev.vibex.companion.app.ui.theme.AppLanguage
 import dev.vibex.companion.app.ui.theme.Appearance
 import dev.vibex.companion.app.ui.theme.AccentChoice
 import dev.vibex.companion.app.net.EventSocket
@@ -125,6 +126,12 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+enum class CloudNodePreference {
+    Auto,
+    OfficialCloud,
+    CustomNode,
+}
 
 data class UiState(
     val profiles: List<HostProfile> = emptyList(),
@@ -152,6 +159,11 @@ data class UiState(
     val monitor: Boolean = true,
     val appearance: Appearance = Appearance.System,
     val accent: AccentChoice = AccentChoice.Blue,
+    val language: AppLanguage = AppLanguage.ZhHans,
+    val confirmHighRiskApproval: Boolean = true,
+    val muteForegroundNotifications: Boolean = true,
+    val customRelayOrigin: String = "",
+    val pendingQrNodeChoiceRaw: String? = null,
     val streamDisplay: StreamDisplayPrefs = StreamDisplayPrefs(),
     val hostVersion: String = "",
     val hostProtocol: String = "",
@@ -325,6 +337,10 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
             selectedProjectId = selected?.selectedProjectId,
             appearance = stored.appearance,
             accent = if (stored.accent == AccentChoice.Ink) AccentChoice.Blue else stored.accent,
+            language = stored.language,
+            confirmHighRiskApproval = stored.confirmHighRiskApproval,
+            muteForegroundNotifications = stored.muteForegroundNotifications,
+            customRelayOrigin = stored.customRelayOrigin,
             streamDisplay = stored.streamDisplay,
             autoConnect = savedAutoConnect,
             accountSignedIn = hasAccountToken,
@@ -367,7 +383,10 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    private var isAppInForeground: Boolean = true
+
     fun onAppForegroundChanged(inForeground: Boolean) {
+        isAppInForeground = inForeground
         if (inForeground) {
             // If the live activity was only a temporary background standby pill, clear it on return
             val currentLive = _state.value.liveActivity
@@ -1056,6 +1075,57 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
         persist { it.copy(appearance = appearance) }
     }
 
+    fun setLanguage(language: AppLanguage) {
+        _state.update { it.copy(language = language) }
+        persist { it.copy(language = language) }
+    }
+
+    fun setConfirmHighRiskApproval(enabled: Boolean) {
+        _state.update { it.copy(confirmHighRiskApproval = enabled) }
+        persist { it.copy(confirmHighRiskApproval = enabled) }
+    }
+
+    fun setMuteForegroundNotifications(enabled: Boolean) {
+        _state.update { it.copy(muteForegroundNotifications = enabled) }
+        persist { it.copy(muteForegroundNotifications = enabled) }
+    }
+
+    fun setCustomRelayOrigin(raw: String) {
+        val normalized = normalizeCustomRelayOrigin(raw)
+        _state.update { it.copy(customRelayOrigin = normalized) }
+        persist { it.copy(customRelayOrigin = normalized) }
+    }
+
+    private fun normalizeCustomRelayOrigin(raw: String): String {
+        val trimmed = raw.trim().trimEnd('/')
+        if (trimmed.isEmpty()) return ""
+        return if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            trimmed
+        } else {
+            "https://$trimmed"
+        }
+    }
+
+    private fun notifyAlertIfAllowed(
+        notificationKey: String,
+        title: String,
+        body: String,
+        conversationId: String? = null,
+        actions: List<SystemNotificationAction> = emptyList(),
+    ) {
+        if (isAppInForeground && _state.value.muteForegroundNotifications) {
+            return
+        }
+        SystemNotifier.notifyAlert(
+            context = getApplication(),
+            notificationKey = notificationKey,
+            title = title,
+            body = body,
+            conversationId = conversationId,
+            actions = actions,
+        )
+    }
+
     fun setAccent(accent: AccentChoice) {
         _state.update { it.copy(accent = accent) }
         persist { it.copy(accent = accent) }
@@ -1089,16 +1159,28 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun pairFromRaw(raw: String, replaceExistingMobile: Boolean = false) {
+    fun pairFromRaw(
+        raw: String,
+        replaceExistingMobile: Boolean = false,
+        nodePreference: CloudNodePreference? = null,
+    ) {
+        val hasCustomNode = _state.value.customRelayOrigin.isNotBlank()
+        val canChooseCloud = hasCustomNode && _state.value.accountSignedIn
+        if (nodePreference == null && canChooseCloud) {
+            _state.update { it.copy(pendingQrNodeChoiceRaw = raw) }
+            return
+        }
+        val effectivePreference = nodePreference ?: CloudNodePreference.Auto
         viewModelScope.launch {
-            _state.update { it.copy(pairing = true, error = null) }
+            _state.update { it.copy(pairing = true, error = null, pendingQrNodeChoiceRaw = null) }
             runCatching {
-                val invitation = PairingInvitationParser.parse(raw)
+                val parsed = PairingInvitationParser.parse(raw)
+                val invitation = applyNodePreference(parsed, effectivePreference)
                 redeemOrMerge(invitation, replaceExistingMobile = replaceExistingMobile)
             }.onFailure { err ->
                 if (err is MobileDeviceConflictException) {
                     pendingConflictRetryAction = {
-                        pairFromRaw(raw, replaceExistingMobile = true)
+                        pairFromRaw(raw, replaceExistingMobile = true, nodePreference = effectivePreference)
                     }
                     _state.update {
                         it.copy(
@@ -1113,6 +1195,40 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
             }
             _state.update { it.copy(pairing = false) }
         }
+    }
+
+    fun confirmPendingNodeChoice(preference: CloudNodePreference) {
+        val raw = _state.value.pendingQrNodeChoiceRaw ?: return
+        _state.update { it.copy(pendingQrNodeChoiceRaw = null) }
+        pairFromRaw(raw, replaceExistingMobile = false, nodePreference = preference)
+    }
+
+    fun cancelPendingNodeChoice() {
+        _state.update { it.copy(pendingQrNodeChoiceRaw = null) }
+    }
+
+    private fun applyNodePreference(
+        invitation: dev.vibex.companion.PairingInvitation,
+        preference: CloudNodePreference,
+    ): dev.vibex.companion.PairingInvitation {
+        val customBase = normalizeCustomRelayOrigin(_state.value.customRelayOrigin)
+        if (preference != CloudNodePreference.CustomNode || customBase.isEmpty()) {
+            return invitation
+        }
+        val customUrl = when {
+            customBase.contains("/t/") -> customBase
+            !invitation.hostId.isNullOrBlank() -> "$customBase/t/${invitation.hostId}"
+            else -> customBase
+        }
+        val customTarget = runCatching {
+            ReachabilityTarget(HostOrigin.parse(customUrl), "published")
+        }.getOrNull() ?: return invitation
+        val filtered = invitation.reachability.filterNot {
+            it.origin.value.contains("vibex.xforever.xin")
+        }
+        return invitation.copy(
+            reachability = listOf(customTarget) + filtered.filterNot { it.origin.value == customTarget.origin.value },
+        )
     }
 
     fun pairManual(origin: String, token: String, replaceExistingMobile: Boolean = false) {
@@ -2092,7 +2208,15 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                 Regex("""^http://(192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)""").containsMatchIn(lower)
         }
 
-        val canUseCloudRelay = _state.value.accountSignedIn && (_state.value.accountOverview?.canUseCloudRelay == true)
+        val customBase = normalizeCustomRelayOrigin(_state.value.customRelayOrigin)
+        if (customBase.isNotEmpty() && !profile.hostId.startsWith("host:")) {
+            val customUrl = if (customBase.contains("/t/")) customBase else "$customBase/t/${profile.hostId}"
+            val customOrigin = runCatching { HostOrigin.parse(customUrl) }.getOrNull()
+            if (customOrigin != null && order.none { it.value == customOrigin.value }) {
+                order.add(customOrigin)
+            }
+        }
+        val canUseCloudRelay = (_state.value.accountSignedIn && (_state.value.accountOverview?.canUseCloudRelay == true)) || customBase.isNotEmpty()
         val wasLanMode = !allowCloudSwitch &&
             !canUseCloudRelay &&
             profile.lastSuccessOrigin != null &&
@@ -2310,8 +2434,7 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                         val project = resolveProjectName(session.workspaceId)
                         val titleText = session.title.ifBlank { "对话任务" }
                         if (event.kind == "turn_failed") {
-                            SystemNotifier.notifyAlert(
-                                getApplication(),
+                            notifyAlertIfAllowed(
                                 key,
                                 "$project · 会话执行出错",
                                 titleText,
@@ -2331,8 +2454,7 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                             )
                             finishLiveActivity(conversationId, failedMessage = titleText)
                         } else {
-                            SystemNotifier.notifyAlert(
-                                getApplication(),
+                            notifyAlertIfAllowed(
                                 key,
                                 "$project · 会话已完成",
                                 titleText,
@@ -2540,8 +2662,7 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                         if (notifiedEventKeys.add(alertKey)) {
                             val project = resolveProjectName(conv.workspaceId)
                             val titleText = conv.title.ifBlank { "新对话已创建，点击查看" }
-                            SystemNotifier.notifyAlert(
-                                getApplication(),
+                            notifyAlertIfAllowed(
                                 alertKey,
                                 "$project · 新会话已创建",
                                 titleText,
@@ -2813,8 +2934,7 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                         add(SystemNotificationAction("拒绝", "perm_reject", convId, perm.id, reject.id))
                     }
                 }
-                SystemNotifier.notifyAlert(
-                    getApplication(),
+                notifyAlertIfAllowed(
                     eventKey,
                     "$project：需要批准操作权限",
                     "$sessionTitle · $subtitle",
@@ -2845,8 +2965,7 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                     SystemNotificationAction("批准执行", "question_confirm", convId, quest.id, "Yes"),
                     SystemNotificationAction("拒绝", "question_reject", convId, quest.id, ""),
                 )
-                SystemNotifier.notifyAlert(
-                    getApplication(),
+                notifyAlertIfAllowed(
                     eventKey,
                     "$project：等待你的回答",
                     "$sessionTitle · $qText",
@@ -2875,8 +2994,7 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
             if (notifiedEventKeys.add(eventKey)) {
                 if (lastRow?.kind == "turn_failed") {
                     val errText = lastRow.body.ifBlank { sessionTitle }
-                    SystemNotifier.notifyAlert(
-                        getApplication(),
+                    notifyAlertIfAllowed(
                         eventKey,
                         "$project · 会话执行异常",
                         errText,
@@ -2896,8 +3014,7 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                     )
                     finishLiveActivity(convId, failedMessage = errText)
                 } else {
-                    SystemNotifier.notifyAlert(
-                        getApplication(),
+                    notifyAlertIfAllowed(
                         eventKey,
                         "$project · 会话已完成",
                         sessionTitle,
@@ -3533,7 +3650,20 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun persist(transform: (StoredState) -> StoredState) {
-        val next = transform(StoredState(_state.value.selectedHostId, _state.value.profiles, _state.value.appearance, _state.value.streamDisplay, _state.value.accent))
+        val cur = _state.value
+        val next = transform(
+            StoredState(
+                selectedHostId = cur.selectedHostId,
+                profiles = cur.profiles,
+                appearance = cur.appearance,
+                streamDisplay = cur.streamDisplay,
+                accent = cur.accent,
+                language = cur.language,
+                confirmHighRiskApproval = cur.confirmHighRiskApproval,
+                muteForegroundNotifications = cur.muteForegroundNotifications,
+                customRelayOrigin = cur.customRelayOrigin,
+            ),
+        )
         viewModelScope.launch(Dispatchers.IO) {
             profiles.save(next)
         }

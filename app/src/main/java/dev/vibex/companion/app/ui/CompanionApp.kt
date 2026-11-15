@@ -1,8 +1,12 @@
 package dev.vibex.companion.app.ui
 
 import android.widget.Toast
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.platform.LocalContext
@@ -36,6 +40,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,34 +55,53 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
 import dev.vibex.companion.ConnectionState
 import dev.vibex.companion.NoticeSeverity
+import dev.vibex.companion.app.CloudNodePreference
 import dev.vibex.companion.app.CompanionModel
 import dev.vibex.companion.app.ConnectedSasNotice
 import dev.vibex.companion.app.DesktopConnectTarget
 import dev.vibex.companion.app.Route
 import dev.vibex.companion.app.UiState
+import dev.vibex.companion.app.ui.theme.LocalAppLanguage
+import dev.vibex.companion.app.ui.theme.LocalConfirmHighRiskApproval
 import dev.vibex.companion.app.ui.theme.PlexMono
 import dev.vibex.companion.app.ui.theme.VibexTheme
+import dev.vibex.companion.app.ui.theme.l
 
 @Composable
 fun CompanionApp(state: UiState, model: CompanionModel) {
-    SplashGate { CompanionShell(state, model) }
+    CompositionLocalProvider(
+        LocalAppLanguage provides state.language,
+        LocalConfirmHighRiskApproval provides state.confirmHighRiskApproval,
+    ) {
+        SplashGate { CompanionShell(state, model) }
+    }
 }
 
 @Composable
 private fun CompanionShell(state: UiState, model: CompanionModel) {
-    val scan = rememberLauncherForActivityResult(ScanContract()) { result ->
-        result.contents?.let(model::pairFromRaw)
+    val context = LocalContext.current
+    var showQrScanner by remember { mutableStateOf(false) }
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            showQrScanner = true
+        } else {
+            model.go(Route.ManualPair)
+        }
     }
     val launchScanner = {
-        scan.launch(
-            ScanOptions()
-                .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                .setPrompt("对准桌面端二维码即可自动识别连接"),
-        )
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.CAMERA,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            showQrScanner = true
+        } else {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
     }
 
     var inNestedCollabChat by remember { mutableStateOf(false) }
@@ -100,7 +124,6 @@ private fun CompanionShell(state: UiState, model: CompanionModel) {
     }
 
     val colors = VibexTheme.colors
-    val context = LocalContext.current
     val updateManager = remember(context) { AppUpdateManager.getInstance(context) }
     val updateState by updateManager.state.collectAsState()
 
@@ -174,7 +197,42 @@ private fun CompanionShell(state: UiState, model: CompanionModel) {
             },
             dismissButton = {
                 TextButton(onClick = { model.cancelReplaceMobileDevice() }) {
-                    Text("取消", color = colors.textSecondary)
+                    Text(l("取消", "Cancel"), color = colors.textSecondary)
+                }
+            },
+        )
+    }
+
+    if (state.pendingQrNodeChoiceRaw != null) {
+        AlertDialog(
+            onDismissRequest = { model.cancelPendingNodeChoice() },
+            containerColor = colors.card,
+            title = {
+                Text(
+                    l("选择连接节点", "Select Connection Node"),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary,
+                )
+            },
+            text = {
+                Text(
+                    l(
+                        "你已配置自建云节点（${state.customRelayOrigin}），请选择本次扫码使用的远程通道：",
+                        "You have a custom cloud node configured (${state.customRelayOrigin}). Choose which remote node to use:",
+                    ),
+                    fontSize = 14.sp,
+                    color = colors.textSecondary,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { model.confirmPendingNodeChoice(CloudNodePreference.CustomNode) }) {
+                    Text(l("自建云节点", "Custom Node"), fontWeight = FontWeight.SemiBold, color = colors.accent)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { model.confirmPendingNodeChoice(CloudNodePreference.OfficialCloud) }) {
+                    Text(l("官方云服务", "Official Cloud"), color = colors.textPrimary)
                 }
             },
         )
@@ -378,6 +436,19 @@ private fun CompanionShell(state: UiState, model: CompanionModel) {
                     }
                 }
             }
+        }
+        if (showQrScanner) {
+            QrScannerOverlay(
+                onCode = { raw ->
+                    showQrScanner = false
+                    model.pairFromRaw(raw)
+                },
+                onManualInput = {
+                    showQrScanner = false
+                    model.go(Route.ManualPair)
+                },
+                onDismiss = { showQrScanner = false },
+            )
         }
     }
 }

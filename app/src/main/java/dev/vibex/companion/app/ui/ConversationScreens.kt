@@ -258,42 +258,27 @@ fun ConversationList(
                     )
                 }
 
-                DropdownMenu(
+                VibexDropdownMenu(
                     expanded = projectMenuExpanded,
                     onDismissRequest = { projectMenuExpanded = false },
                 ) {
-                    DropdownMenuItem(
-                        text = { Text("全部项目", fontSize = 14.sp) },
-                        leadingIcon = { Icon(Icons.Rounded.Layers, null, modifier = Modifier.size(17.dp)) },
-                        trailingIcon = {
-                            if (selectedFilterProject == null) {
-                                Icon(Icons.Rounded.Check, null, tint = colors.accent, modifier = Modifier.size(16.dp))
-                            }
-                        },
+                    VibexDropdownMenuItem(
+                        text = "全部项目",
+                        leadingIcon = Icons.Rounded.Layers,
+                        selected = selectedFilterProject == null,
                         onClick = {
                             projectMenuExpanded = false
                             model.selectProjectInPlace(null)
                         },
                     )
                     if (projects.isNotEmpty()) {
-                        HorizontalDivider(color = colors.hairline)
+                        VibexDropdownDivider()
                         projects.forEach { proj ->
                             val isSelected = selectedFilterProject?.id?.equals(proj.id, ignoreCase = true) == true
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        text = proj.name,
-                                        fontSize = 14.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                },
-                                leadingIcon = { Icon(Icons.Rounded.Folder, null, modifier = Modifier.size(17.dp)) },
-                                trailingIcon = {
-                                    if (isSelected) {
-                                        Icon(Icons.Rounded.Check, null, tint = colors.accent, modifier = Modifier.size(16.dp))
-                                    }
-                                },
+                            VibexDropdownMenuItem(
+                                text = proj.name,
+                                leadingIcon = Icons.Rounded.Folder,
+                                selected = isSelected,
                                 onClick = {
                                     projectMenuExpanded = false
                                     model.selectProjectInPlace(proj.id)
@@ -404,25 +389,31 @@ fun ConversationList(
                 },
                 modifier = Modifier.fillMaxSize(),
             ) {
-                val nowMs = System.currentTimeMillis()
-                val runningList = mergedSessions.filter {
-                    it.status == KanbanSessionStatus.InProgress ||
-                        (it.isRunning && it.status != KanbanSessionStatus.InReview)
-                }
-                val runningIds = runningList.map { it.id }.toSet()
-                val reviewList = mergedSessions.filter {
-                    it.status == KanbanSessionStatus.InReview && it.id !in runningIds
-                }
-                val recentReadList = mergedSessions.filter {
-                    it.isRecentlyActiveReadSession(state.manuallyCompletedSessionIds, nowMs)
-                }
-                val todoList = mergedSessions.filter {
-                    it.status == KanbanSessionStatus.Todo && !it.isRunning
-                }
-                val doneList = mergedSessions.filter {
-                    it.status == KanbanSessionStatus.Done &&
-                        !it.isRunning &&
-                        !it.isRecentlyActiveReadSession(state.manuallyCompletedSessionIds, nowMs)
+                val (runningList, reviewList, recentReadList, todoList, doneList) = remember(
+                    mergedSessions,
+                    state.manuallyCompletedSessionIds,
+                ) {
+                    val nowMs = System.currentTimeMillis()
+                    val running = mergedSessions.filter {
+                        it.status == KanbanSessionStatus.InProgress ||
+                            (it.isRunning && it.status != KanbanSessionStatus.InReview)
+                    }
+                    val runningIds = running.mapTo(HashSet()) { it.id }
+                    val review = mergedSessions.filter {
+                        it.status == KanbanSessionStatus.InReview && it.id !in runningIds
+                    }
+                    val recentRead = mergedSessions.filter {
+                        it.isRecentlyActiveReadSession(state.manuallyCompletedSessionIds, nowMs)
+                    }
+                    val todo = mergedSessions.filter {
+                        it.status == KanbanSessionStatus.Todo && !it.isRunning
+                    }
+                    val done = mergedSessions.filter {
+                        it.status == KanbanSessionStatus.Done &&
+                            !it.isRunning &&
+                            !it.isRecentlyActiveReadSession(state.manuallyCompletedSessionIds, nowMs)
+                    }
+                    listOf(running, review, recentRead, todo, done)
                 }
                 val hasActive = runningList.isNotEmpty() ||
                     reviewList.isNotEmpty() ||

@@ -470,13 +470,13 @@ fun PromptBar(
                         }
                     }
 
-                    DropdownMenu(
+                    VibexDropdownMenu(
                         expanded = plusMenuExpanded,
                         onDismissRequest = { plusMenuExpanded = false },
                     ) {
-                        DropdownMenuItem(
-                            text = { Text("照片图库", fontSize = 14.sp) },
-                            leadingIcon = { Icon(Icons.Rounded.PhotoLibrary, null, modifier = Modifier.size(18.dp)) },
+                        VibexDropdownMenuItem(
+                            text = "照片图库",
+                            leadingIcon = Icons.Rounded.PhotoLibrary,
                             onClick = {
                                 plusMenuExpanded = false
                                 photoPicker.launch(
@@ -485,9 +485,9 @@ fun PromptBar(
                             },
                         )
                         if (onOpenFileBrowser != null) {
-                            DropdownMenuItem(
-                                text = { Text("浏览项目文件", fontSize = 14.sp) },
-                                leadingIcon = { Icon(Icons.Rounded.Folder, null, modifier = Modifier.size(18.dp)) },
+                            VibexDropdownMenuItem(
+                                text = "浏览项目文件",
+                                leadingIcon = Icons.Rounded.Folder,
                                 onClick = {
                                     plusMenuExpanded = false
                                     onOpenFileBrowser()
@@ -495,19 +495,19 @@ fun PromptBar(
                             )
                         }
                         if (onCompact != null) {
-                            DropdownMenuItem(
-                                text = { Text("压缩上下文 (/compact)", fontSize = 14.sp) },
-                                leadingIcon = { Icon(Icons.Rounded.Compress, null, modifier = Modifier.size(18.dp)) },
+                            VibexDropdownMenuItem(
+                                text = "压缩上下文 (/compact)",
+                                leadingIcon = Icons.Rounded.Compress,
                                 onClick = {
                                     plusMenuExpanded = false
                                     onCompact()
                                 },
                             )
                         }
-                        HorizontalDivider()
-                        DropdownMenuItem(
-                            text = { Text("会话与模型设置", fontSize = 14.sp) },
-                            leadingIcon = { Icon(Icons.Rounded.Tune, null, modifier = Modifier.size(18.dp)) },
+                        VibexDropdownDivider()
+                        VibexDropdownMenuItem(
+                            text = "会话与模型设置",
+                            leadingIcon = Icons.Rounded.Tune,
                             onClick = {
                                 plusMenuExpanded = false
                                 onRefreshCatalog?.invoke()

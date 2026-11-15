@@ -59,18 +59,23 @@ import dev.vibex.companion.app.CompanionModel
 import dev.vibex.companion.app.Route
 import dev.vibex.companion.app.ui.theme.PlexMono
 import dev.vibex.companion.app.ui.theme.VibexTheme
+import dev.vibex.companion.app.ui.theme.l
 
 val BOTTOM_DOCK_CLEARANCE = 78.dp
 
 enum class AppDestination(
     val title: String,
+    val englishTitle: String,
     val icon: ImageVector,
     val selectedIcon: ImageVector,
 ) {
-    Conversations("会话", Icons.Outlined.ChatBubbleOutline, Icons.Rounded.ChatBubble),
-    Status("看板", Icons.Outlined.BarChart, Icons.Rounded.BarChart),
-    Collaboration("协作", Icons.Outlined.Groups, Icons.Rounded.Groups),
-    Settings("设置", Icons.Outlined.Settings, Icons.Rounded.Settings),
+    Conversations("会话", "Chats", Icons.Outlined.ChatBubbleOutline, Icons.Rounded.ChatBubble),
+    Status("看板", "Board", Icons.Outlined.BarChart, Icons.Rounded.BarChart),
+    Collaboration("协作", "Team", Icons.Outlined.Groups, Icons.Rounded.Groups),
+    Settings("设置", "Settings", Icons.Outlined.Settings, Icons.Rounded.Settings);
+
+    @Composable
+    fun localizedTitle(): String = l(title, englishTitle)
 }
 
 val Route.destination: AppDestination
@@ -251,7 +256,7 @@ private fun DockTabItem(
         Box {
             Icon(
                 imageVector = if (isSelected) destination.selectedIcon else destination.icon,
-                contentDescription = destination.title,
+                contentDescription = destination.localizedTitle(),
                 tint = fgColor,
                 modifier = Modifier.size(20.dp),
             )
@@ -278,7 +283,7 @@ private fun DockTabItem(
             }
         }
         Text(
-            text = destination.title,
+            text = destination.localizedTitle(),
             fontSize = 10.5.sp,
             fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
             color = fgColor,

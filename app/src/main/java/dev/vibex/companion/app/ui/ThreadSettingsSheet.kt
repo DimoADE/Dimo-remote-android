@@ -718,46 +718,34 @@ fun ThreadSettingsSheet(
                             }
                         }
 
-                        DropdownMenu(
+                        VibexDropdownMenu(
                             expanded = filterMenuExpanded,
                             onDismissRequest = { filterMenuExpanded = false },
                         ) {
-                            DropdownMenuItem(
-                                text = { Text("全部模型", fontSize = 14.sp) },
-                                trailingIcon = {
-                                    if (activeFilter == ModelCatalogFilter.All) {
-                                        Icon(Icons.Rounded.Check, null, modifier = Modifier.size(16.dp))
-                                    }
-                                },
+                            VibexDropdownMenuItem(
+                                text = "全部模型",
+                                selected = activeFilter == ModelCatalogFilter.All,
                                 onClick = {
                                     activeFilter = ModelCatalogFilter.All
                                     filterMenuExpanded = false
                                 },
                             )
-                            DropdownMenuItem(
-                                text = { Text("仅显示收藏", fontSize = 14.sp) },
-                                trailingIcon = {
-                                    if (activeFilter == ModelCatalogFilter.Favorites) {
-                                        Icon(Icons.Rounded.Check, null, modifier = Modifier.size(16.dp))
-                                    }
-                                },
+                            VibexDropdownMenuItem(
+                                text = "仅显示收藏",
+                                selected = activeFilter == ModelCatalogFilter.Favorites,
                                 onClick = {
                                     activeFilter = ModelCatalogFilter.Favorites
                                     filterMenuExpanded = false
                                 },
                             )
                             if (orderedGroups.size > 1) {
-                                HorizontalDivider()
+                                VibexDropdownDivider()
                                 orderedGroups.forEach { grp ->
                                     val selected = (activeFilter as? ModelCatalogFilter.Provider)
                                         ?.agentId?.equals(grp.agentId, ignoreCase = true) == true
-                                    DropdownMenuItem(
-                                        text = { Text(grp.title, fontSize = 14.sp) },
-                                        trailingIcon = {
-                                            if (selected) {
-                                                Icon(Icons.Rounded.Check, null, modifier = Modifier.size(16.dp))
-                                            }
-                                        },
+                                    VibexDropdownMenuItem(
+                                        text = grp.title,
+                                        selected = selected,
                                         onClick = {
                                             activeFilter = ModelCatalogFilter.Provider(grp.agentId, grp.title)
                                             filterMenuExpanded = false

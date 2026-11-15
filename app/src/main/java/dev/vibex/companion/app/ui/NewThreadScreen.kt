@@ -481,21 +481,17 @@ fun NewThreadScreen(
                         )
                     }
 
-                    DropdownMenu(
+                    VibexDropdownMenu(
                         expanded = workspaceMenuExpanded,
                         onDismissRequest = { workspaceMenuExpanded = false },
                     ) {
                         projectWorkspaces.forEach { ws ->
                             val label = ws.branch.ifBlank { ws.name.ifBlank { "默认工作区" } }
                             val isSelected = ws.id == currentWorkspace?.id
-                            DropdownMenuItem(
-                                text = { Text(label, fontSize = 14.sp) },
-                                leadingIcon = { Icon(Icons.Rounded.AccountTree, null, modifier = Modifier.size(16.dp)) },
-                                trailingIcon = {
-                                    if (isSelected) {
-                                        Icon(Icons.Rounded.Check, null, tint = colors.accent, modifier = Modifier.size(16.dp))
-                                    }
-                                },
+                            VibexDropdownMenuItem(
+                                text = label,
+                                leadingIcon = Icons.Rounded.AccountTree,
+                                selected = isSelected,
                                 onClick = {
                                     workspaceMenuExpanded = false
                                     selectedWorkspaceId = ws.id
@@ -504,11 +500,11 @@ fun NewThreadScreen(
                         }
                         if (currentProject != null && state.connection.allowsWrites) {
                             if (projectWorkspaces.isNotEmpty()) {
-                                HorizontalDivider(color = colors.hairline)
+                                VibexDropdownDivider()
                             }
-                            DropdownMenuItem(
-                                text = { Text("新建工作树…", fontSize = 14.sp) },
-                                leadingIcon = { Icon(Icons.Rounded.Add, null, modifier = Modifier.size(16.dp)) },
+                            VibexDropdownMenuItem(
+                                text = "新建工作树…",
+                                leadingIcon = Icons.Rounded.Add,
                                 onClick = {
                                     workspaceMenuExpanded = false
                                     newWorktreeName = ""
