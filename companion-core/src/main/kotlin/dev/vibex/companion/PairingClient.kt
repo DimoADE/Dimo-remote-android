@@ -233,8 +233,7 @@ class PairingClient(
         const val CLIENT_PROTOCOL_VERSION = "1.0"
         const val PROTOCOL_HEADER = "x-vibex-protocol-version"
         const val DEFAULT_OFFICIAL_RELAY_PORT = 443
-        val DEFAULT_OFFICIAL_RELAY_BASE: String =
-            System.getenv("VIBEX_RELAY_URL")?.trim()?.takeIf { it.isNotEmpty() } ?: "https://vibex.xforever.xin"
+        val DEFAULT_OFFICIAL_RELAY_BASE: String = OfficialEndpoints.officialRelayBase()
         const val HAPPY_EYEBALLS_LAN_WINDOW_MS = 250L
 
         private val rememberedRelayBases = java.util.concurrent.CopyOnWriteArraySet<String>(
@@ -242,7 +241,7 @@ class PairingClient(
         )
 
         fun rememberRelayBase(originOrBaseUrl: String) {
-            val trimmed = originOrBaseUrl.trim().trimEnd('/')
+            val trimmed = OfficialEndpoints.compatOfficialUrl(originOrBaseUrl).trim().trimEnd('/')
             if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return
             val base = if (trimmed.contains("/t/")) {
                 trimmed.substringBefore("/t/")

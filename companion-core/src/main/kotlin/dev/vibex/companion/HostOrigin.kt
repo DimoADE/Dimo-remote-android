@@ -22,7 +22,7 @@ data class HostOrigin(val value: String) {
 
     companion object {
         fun parse(raw: String): HostOrigin {
-            val trimmed = raw.trim().trimEnd('/')
+            val trimmed = OfficialEndpoints.compatOfficialUrl(raw.trim()).trimEnd('/')
             require(trimmed.isNotEmpty()) { "Host origin is required" }
             val uri = try {
                 URI(trimmed)
