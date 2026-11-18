@@ -3,6 +3,7 @@ package dev.vibex.companion.app.data
 import android.content.Context
 import android.os.Build
 import dev.vibex.companion.AccountAuthRequests
+import dev.vibex.companion.OfficialEndpoints
 import dev.vibex.companion.AccountDesktop
 import dev.vibex.companion.AccountDesktops
 import dev.vibex.companion.AssignedRelayServer
@@ -154,7 +155,7 @@ class VibeXAccountException(
 
 class VibeXAccountRepository(context: Context) {
     companion object {
-        const val SITE_BASE_URL = "https://vibex.xforever.xin"
+        const val SITE_BASE_URL = OfficialEndpoints.SITE_BASE_URL
         const val PRIVACY_PATH = "/docs/privacy"
         const val LOGIN_CODE_COOLDOWN_SECONDS = 60
         private const val PREF_TOKEN_KEY = "vibex.account.token"

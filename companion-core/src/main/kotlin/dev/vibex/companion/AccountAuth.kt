@@ -25,9 +25,10 @@ object AccountAuthRequests {
 
     /** Provider sign-in page that returns to the device login's authorize page once the site session exists. */
     fun oauthStartUrl(siteBaseUrl: String, provider: String, verifyUrl: String): String {
+        val siteBase = OfficialEndpoints.siteBase(siteBaseUrl)
         val verify = URI(verifyUrl)
         val next = verify.rawPath + (verify.rawQuery?.let { "?$it" } ?: "")
-        return "$siteBaseUrl/api/auth/oauth/$provider/start?next=${URLEncoder.encode(next, "UTF-8")}"
+        return "$siteBase/api/auth/oauth/$provider/start?next=${URLEncoder.encode(next, "UTF-8")}"
     }
 }
 

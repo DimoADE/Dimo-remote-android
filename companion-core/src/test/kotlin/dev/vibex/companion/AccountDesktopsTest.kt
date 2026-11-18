@@ -58,8 +58,16 @@ class AccountDesktopsTest {
     fun tenantOriginUsesAssignedRelayOrDefault() {
         val fallback = "https://vibex.xforever.xin"
         assertEquals(
-            "https://vibex.xforever.xin/t/alpha",
+            "https://dimo-ai.com/t/alpha",
             AccountDesktops.tenantOrigin(AccountDesktops.relayBase(null, fallback), "host:alpha"),
+        )
+        assertEquals(
+            "https://dimo-ai.com",
+            AccountDesktops.relayBase(AssignedRelayServer(publicOrigin = "https://vibex.xforever.xin/"), fallback),
+        )
+        assertEquals(
+            "https://dimo-ai.com",
+            AccountDesktops.relayBase(AssignedRelayServer(relayHost = "www.vibex.xforever.xin"), "https://custom.example"),
         )
         assertEquals(
             "https://relay.cn.example/t/alpha",

@@ -73,16 +73,21 @@ object AccountDesktops {
 
     /** Base URL of the relay that fronts the account's desktops. */
     fun relayBase(server: AssignedRelayServer?, defaultBase: String): String {
-        val publicOrigin = server?.publicOrigin?.trim()?.trimEnd('/').orEmpty()
-        if (publicOrigin.isNotEmpty()) {
-            return if (publicOrigin.contains("://")) publicOrigin else "https://$publicOrigin"
+        val resolved = run {
+            val publicOrigin = server?.publicOrigin?.trim()?.trimEnd('/').orEmpty()
+            if (publicOrigin.isNotEmpty()) {
+                if (publicOrigin.contains("://")) publicOrigin else "https://$publicOrigin"
+            } else {
+                val host = server?.relayHost?.trim().orEmpty()
+                if (host.isNotEmpty()) {
+                    val port = server?.relayPort ?: 0
+                    if (port > 0 && port != 443) "https://$host:$port" else "https://$host"
+                } else {
+                    defaultBase.trim().trimEnd('/')
+                }
+            }
         }
-        val host = server?.relayHost?.trim().orEmpty()
-        if (host.isNotEmpty()) {
-            val port = server?.relayPort ?: 0
-            return if (port > 0 && port != 443) "https://$host:$port" else "https://$host"
-        }
-        return defaultBase.trim().trimEnd('/')
+        return OfficialEndpoints.compatOfficialUrl(resolved).trimEnd('/')
     }
 
     fun tenantOrigin(relayBase: String, hostId: String): String =
