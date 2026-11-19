@@ -4537,8 +4537,9 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
                 val msg = when {
                     raw.contains("cancelled", true) -> "已中止"
                     raw.contains("timeout", true) || raw.contains("timed out", true) -> "旁路对话超时，Host 未在限定时间内返回"
+                    raw.contains("not currently connected to the relay", true) -> "电脑当前离线或未连接到 Dimo 云中继"
                     raw.isBlank() -> "旁路对话失败"
-                    else -> raw
+                    else -> raw.replace(Regex("vibex", RegexOption.IGNORE_CASE), "Dimo")
                 }
                 updateSideChat(conversationId) {
                     it.copy(sending = false, messages = it.messages + SideChatMessage(java.util.UUID.randomUUID().toString(), "assistant", msg, isError = true))
@@ -4577,10 +4578,14 @@ class CompanionModel(application: Application) : AndroidViewModel(application) {
         val message = when {
             raw.contains("is not registered") -> "电脑端需要更新后重启"
             raw.contains("timeout", true) || raw.contains("timed out", true) -> "连接超时"
+            raw.contains("not currently connected to the relay", true) ||
+                raw.contains("Host is offline", true) ||
+                raw.contains("Bad Gateway", true) ||
+                raw.contains("502") -> "电脑当前离线或未连接到 Dimo 云中继"
             raw.contains("Host health check", true) ||
                 raw.contains("/t/") -> "电脑端暂未响应，请确认电脑在线"
             raw.isBlank() -> "请求失败"
-            else -> raw
+            else -> raw.replace(Regex("vibex", RegexOption.IGNORE_CASE), "Dimo")
         }
         _state.update { it.copy(error = message, pairing = false) }
         scheduleAutoDismissNotice(3_500L)
