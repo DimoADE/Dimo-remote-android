@@ -2,6 +2,13 @@ package dev.vibex.companion
 
 import dev.vibex.remote.v1.JsonValue
 import dev.vibex.remote.v1.RemoteEvent
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeFormatterBuilder
+import java.time.temporal.ChronoField
 import java.util.UUID
 
 data class ConversationSummary(
@@ -27,7 +34,41 @@ data class CatalogAgent(
     val usable: Boolean = true,
     val lifecycle: String = "",
     val authentication: String = "",
-)
+) {
+    val modelOptions: List<SessionConfigOption>
+        get() {
+            val matched = sessionConfig.filter {
+                val cat = it.category.lowercase()
+                val key = it.key.lowercase()
+                cat == "model" || key == "model" || key.contains("model")
+            }
+            if (matched.isNotEmpty() && matched.any { it.choices.isNotEmpty() }) {
+                return matched
+            }
+            return listOf(fallbackModelOptionForAgent(id))
+        }
+
+    val otherOptions: List<SessionConfigOption>
+        get() = sessionConfig.filter {
+            val cat = it.category.lowercase()
+            val key = it.key.lowercase()
+            cat != "model" && cat != "mode" && key != "model" && !key.contains("model") && key != "mode"
+        }
+
+    companion object {
+        fun makeCustomChoice(modelId: String): SessionConfigChoice =
+            SessionConfigChoice(value = modelId, label = modelId, description = "自定义 / 中转模型")
+
+        fun makeCustomModelOption(key: String = "model", modelId: String): SessionConfigOption =
+            SessionConfigOption(
+                key = key,
+                label = "模型",
+                category = "model",
+                value = modelId,
+                choices = listOf(makeCustomChoice(modelId)),
+            )
+    }
+}
 
 data class CatalogTag(val id: String, val name: String, val content: String = "")
 data class WorkspaceEntry(val name: String, val path: String, val directory: Boolean)
@@ -136,6 +177,9 @@ class HostApi(
     fun catalog(origin: HostOrigin, token: String): SessionCatalog {
         val data = call(origin, token, "conversation_catalog", emptyMap())
         val root = data.asObject() ?: return SessionCatalog(emptyList(), emptyList(), emptyList())
+        val managementBar = runCatching {
+            call(origin, token, "agent_management_bar", emptyMap())
+        }.getOrNull()
         return SessionCatalog(
             projects = root.arrOrNull("projects").orEmpty().mapNotNull { item ->
                 val obj = item.asObject() ?: return@mapNotNull null
@@ -154,41 +198,7 @@ class HostApi(
                     obj.textAny("branch"),
                 )
             },
-            agents = root.arrOrNull("agents").orEmpty().mapNotNull { item ->
-                val obj = item.asObject() ?: return@mapNotNull null
-                val ready = obj.boolOrNull("ready") ?: true
-                val lifecycle = obj.textAny("lifecycle")
-                val authentication = obj.textAny("authentication")
-                val agentId = obj.textAny("id")
-                val parsedConfig = parseJsonOptions(
-                    obj,
-                    "sessionConfigJson",
-                    "session_config_json",
-                    "sessionConfig",
-                    "session_config",
-                    "configOptions",
-                    "config_options",
-                    "controls",
-                )
-                CatalogAgent(
-                    id = agentId,
-                    ready = ready,
-                    displayName = obj.textAny("displayName", "display_name", "name"),
-                    iconSvg = obj.textAny("iconSvg", "icon_svg"),
-                    currentModeId = parseCurrentMode(obj),
-                    sessionConfig = ensureAgentDefaultOptions(agentId, parsedConfig),
-                    sessionModes = parseJsonModes(
-                        obj,
-                        "sessionModesJson",
-                        "session_modes_json",
-                        "sessionModes",
-                        "session_modes",
-                    ).ifEmpty { extractModesFromControls(obj) },
-                    usable = obj.boolOrNull("usable") ?: agentIsUsable(ready, lifecycle, authentication),
-                    lifecycle = lifecycle,
-                    authentication = authentication,
-                )
-            },
+            agents = parseCatalogAgents(root, managementBar),
             tags = root.arrOrNull("tags").orEmpty().mapNotNull { item ->
                 val obj = item.asObject() ?: return@mapNotNull null
                 val name = obj.textAny("name", "tagName", "tag_name")
@@ -465,6 +475,45 @@ class HostApi(
     }
 
 
+    /** Light `conversation_detail` read used for steering capability + current turn. */
+    fun conversationDetailLight(origin: HostOrigin, token: String, conversationId: String): JsonValue =
+        call(
+            origin,
+            token,
+            "conversation_detail",
+            mapOf("conversationId" to conversationId, "tailTurns" to 1.0),
+        )
+
+    fun rateLimitUpdateAutoResume(
+        origin: HostOrigin,
+        token: String,
+        conversationId: String,
+        autoResume: Boolean,
+        continuationPrompt: String? = null,
+    ) {
+        call(
+            origin,
+            token,
+            "conversation_rate_limit_update_auto_resume",
+            mapOf(
+                "request" to mapOf(
+                    "conversationId" to conversationId,
+                    "autoResume" to autoResume,
+                    "continuationPrompt" to continuationPrompt,
+                ),
+            ),
+        )
+    }
+
+    fun rateLimitCancelWait(origin: HostOrigin, token: String, conversationId: String) {
+        call(
+            origin,
+            token,
+            "conversation_rate_limit_cancel_wait",
+            mapOf("request" to mapOf("conversationId" to conversationId)),
+        )
+    }
+
     fun cancelConversationInput(
         origin: HostOrigin,
         token: String,
@@ -680,8 +729,15 @@ class HostApi(
         }
     }
 
-    fun collaboration(origin: HostOrigin, token: String, operation: String, input: Map<String, Any?>): JsonValue {
+    fun collaboration(
+        origin: HostOrigin,
+        token: String,
+        operation: String,
+        input: Map<String, Any?>,
+        operationId: String = UUID.randomUUID().toString(),
+    ): JsonValue {
         return call(
+            operationId = operationId,
             origin = origin,
             token = token,
             command = "collaboration_call",
@@ -951,8 +1007,13 @@ class HostApi(
         )
     }
 
-    fun call(origin: HostOrigin, token: String, command: String, args: Map<String, Any?>): JsonValue {
-        val operationId = UUID.randomUUID().toString()
+    fun call(
+        origin: HostOrigin,
+        token: String,
+        command: String,
+        args: Map<String, Any?>,
+        operationId: String = UUID.randomUUID().toString(),
+    ): JsonValue {
         val body = encodeObject(
             mapOf(
                 "operation_id" to operationId,
@@ -1094,6 +1155,108 @@ private fun unwrapObject(node: JsonValue?): JsonValue.Object? = when (node) {
     else -> null
 }
 
+internal fun parseCatalogAgents(
+    root: JsonValue.Object,
+    managementBar: JsonValue? = null,
+): List<CatalogAgent> {
+    val rawAgents = root.arrOrNull("agents").orEmpty()
+    if (rawAgents.isEmpty()) return emptyList()
+
+    var managementRunnableIds: Set<String>? = null
+    val managementPositions = mutableMapOf<String, Int>()
+    val barRows = managementBar?.asArray()?.value
+        ?: managementBar?.asObject()?.arrOrNull("items", "entries")
+    if (!barRows.isNullOrEmpty()) {
+        val runnable = mutableSetOf<String>()
+        var sawBarEntry = false
+        barRows.forEachIndexed { idx, rowItem ->
+            val row = rowItem.asObject() ?: return@forEachIndexed
+            val id = row.textAny("agent_id", "agentId").trim()
+            if (id.isEmpty()) return@forEachIndexed
+            sawBarEntry = true
+            val pos = row.longOrNull("position")?.toInt() ?: idx
+            managementPositions[id] = pos
+            val enabled = row.boolOrNull("enabled") == true
+            val retired = row.boolOrNull("retired") == true
+            val lifecycle = row.textAny("lifecycle").trim().lowercase()
+            val activeOp = row.textAny("active_operation", "activeOperation").trim()
+            val localPath = (
+                row.objOrNull("local_runtime")?.textAny("path")
+                    ?: row.objOrNull("localRuntime")?.textAny("path")
+                ).orEmpty().trim()
+            if (enabled && !retired && activeOp.isEmpty() && (lifecycle == "ready" || localPath.isNotEmpty())) {
+                runnable += id
+            }
+        }
+        if (sawBarEntry) {
+            managementRunnableIds = runnable
+        }
+    }
+
+    val hasLifecycleSignal = rawAgents.any { item ->
+        item.asObject()?.textAny("lifecycle")?.trim()?.isNotEmpty() == true
+    }
+
+    val indexed = rawAgents.mapIndexedNotNull { originalIdx, item ->
+        val obj = item.asObject() ?: return@mapIndexedNotNull null
+        val agentId = obj.textAny("id")
+        if (agentId.isBlank()) return@mapIndexedNotNull null
+        val ready = obj.boolOrNull("ready") ?: true
+        val lifecycle = obj.textAny("lifecycle").trim()
+        val authentication = obj.textAny("authentication")
+        val parsedConfig = parseJsonOptions(
+            obj,
+            "sessionConfigJson",
+            "session_config_json",
+            "sessionConfig",
+            "session_config",
+            "configOptions",
+            "config_options",
+            "controls",
+        )
+        val parsedModes = parseJsonModes(
+            obj,
+            "sessionModesJson",
+            "session_modes_json",
+            "sessionModes",
+            "session_modes",
+        ).ifEmpty { extractModesFromControls(obj) }
+        val catalogUsable = obj.boolOrNull("usable") ?: agentIsUsable(ready, lifecycle, authentication)
+        val runnableSet = managementRunnableIds
+        val effectiveUsable = when {
+            runnableSet != null -> catalogUsable && agentId in runnableSet
+            hasLifecycleSignal -> {
+                val isInstalledByCatalog = lifecycle.equals("ready", ignoreCase = true) ||
+                    parsedConfig.isNotEmpty() ||
+                    parsedModes.isNotEmpty()
+                catalogUsable && isInstalledByCatalog
+            }
+            else -> catalogUsable
+        }
+        originalIdx to CatalogAgent(
+            id = agentId,
+            ready = ready,
+            displayName = obj.textAny("displayName", "display_name", "name").ifBlank { agentId },
+            iconSvg = obj.textAny("iconSvg", "icon_svg"),
+            currentModeId = parseCurrentMode(obj),
+            sessionConfig = parsedConfig,
+            sessionModes = parsedModes,
+            usable = effectiveUsable,
+            lifecycle = lifecycle,
+            authentication = authentication,
+        )
+    }
+
+    if (managementPositions.isEmpty()) {
+        return indexed.map { it.second }
+    }
+    return indexed.sortedWith { lhs, rhs ->
+        val lPos = managementPositions[lhs.second.id] ?: (10_000 + lhs.first)
+        val rPos = managementPositions[rhs.second.id] ?: (10_000 + rhs.first)
+        if (lPos != rPos) lPos.compareTo(rPos) else lhs.first.compareTo(rhs.first)
+    }.map { it.second }
+}
+
 fun fallbackModelOptionForAgent(agentId: String): SessionConfigOption {
     val lower = agentId.lowercase()
     return when {
@@ -1101,15 +1264,14 @@ fun fallbackModelOptionForAgent(agentId: String): SessionConfigOption {
             key = "model",
             label = "模型",
             category = "model",
-            value = "default",
+            value = "opus",
             choices = listOf(
-                SessionConfigChoice("default", "Default (推荐)"),
-                SessionConfigChoice("opus", "Claude Opus 4.7"),
-                SessionConfigChoice("sonnet", "Claude Sonnet 4.6"),
-                SessionConfigChoice("haiku", "Claude Haiku 4.5"),
-                SessionConfigChoice("claude-opus-4-8", "Claude Opus 4.8 (中转)"),
-                SessionConfigChoice("claude-sonnet-5", "Claude Sonnet 5 (中转)"),
-                SessionConfigChoice("claude-haiku-5-5", "Claude Haiku 5.5 (中转)"),
+                SessionConfigChoice("opus", "Claude Opus 4.6", "最强深度推理与复杂工程"),
+                SessionConfigChoice("sonnet", "Claude Sonnet 4.6", "日常开发主力 · 均衡高速"),
+                SessionConfigChoice("haiku", "Claude Haiku 4.5", "轻量极速响应"),
+                SessionConfigChoice("claude-opus-4-8", "claude-opus-4-8", "自定义 / 中转 Opus"),
+                SessionConfigChoice("claude-sonnet-5", "claude-sonnet-5", "自定义 / 中转 Sonnet"),
+                SessionConfigChoice("claude-haiku-5-5", "claude-haiku-5-5", "自定义 / 中转 Haiku"),
             ),
         )
         lower.contains("codex") || lower.contains("openai") -> SessionConfigOption(
@@ -1118,10 +1280,12 @@ fun fallbackModelOptionForAgent(agentId: String): SessionConfigOption {
             category = "model",
             value = "gpt-5.4",
             choices = listOf(
-                SessionConfigChoice("gpt-5.4", "GPT-5.4"),
-                SessionConfigChoice("gpt-5.3-codex", "GPT-5.3-Codex"),
-                SessionConfigChoice("gpt-5.4-mini", "GPT-5.4-Mini"),
-                SessionConfigChoice("gpt-6-sol", "GPT-6-Sol (中转)"),
+                SessionConfigChoice("gpt-5.4", "GPT-5.4", "OpenAI 旗舰代码与推理模型"),
+                SessionConfigChoice("gpt-5.3-codex", "GPT-5.3 Codex", "专为软件工程优化的 Codex 模型"),
+                SessionConfigChoice("gpt-5.2-codex", "GPT-5.2 Codex", "稳健高速代码生成"),
+                SessionConfigChoice("gpt-6-sol", "gpt-6-sol", "自定义 / 中转旗舰模型"),
+                SessionConfigChoice("o3", "o3", "深度推理模型"),
+                SessionConfigChoice("o4-mini", "o4-mini", "高性价比快速推理"),
             ),
         )
         lower.contains("gemini") || lower.contains("antigravity") -> SessionConfigOption(
@@ -1130,8 +1294,10 @@ fun fallbackModelOptionForAgent(agentId: String): SessionConfigOption {
             category = "model",
             value = "gemini-2.5-pro",
             choices = listOf(
-                SessionConfigChoice("gemini-2.5-pro", "Gemini 2.5 Pro"),
-                SessionConfigChoice("gemini-2.5-flash", "Gemini 2.5 Flash"),
+                SessionConfigChoice("gemini-2.5-pro", "Gemini 2.5 Pro", "旗舰多模态与深度长上下文推理"),
+                SessionConfigChoice("gemini-2.5-flash", "Gemini 2.5 Flash", "高速低延迟日常主力"),
+                SessionConfigChoice("gemini-3.8-flash", "Gemini 3.8 Flash", "新一代高速推理"),
+                SessionConfigChoice("gemini-4-argon", "Gemini 4 Argon", "前沿旗舰推理"),
             ),
         )
         lower.contains("kimi") -> SessionConfigOption(
@@ -1140,18 +1306,30 @@ fun fallbackModelOptionForAgent(agentId: String): SessionConfigOption {
             category = "model",
             value = "kimi-k2",
             choices = listOf(
-                SessionConfigChoice("kimi-k2", "Kimi K2"),
-                SessionConfigChoice("kimi-latest", "Kimi Latest"),
+                SessionConfigChoice("kimi-k2", "Kimi K2", "Moonshot 旗舰代码与推理"),
+                SessionConfigChoice("kimi-latest", "Kimi Latest", "最新默认模型"),
+                SessionConfigChoice("moonshot-v1-128k", "Moonshot v1 128K", "长上下文模型"),
             ),
         )
         lower.contains("deepseek") -> SessionConfigOption(
             key = "model",
             label = "模型",
             category = "model",
-            value = "deepseek-reasoner",
+            value = "deepseek-chat",
             choices = listOf(
-                SessionConfigChoice("deepseek-reasoner", "DeepSeek R1"),
-                SessionConfigChoice("deepseek-chat", "DeepSeek V3"),
+                SessionConfigChoice("deepseek-chat", "DeepSeek V3", "高效日常对话与编码"),
+                SessionConfigChoice("deepseek-reasoner", "DeepSeek R1", "深度思考推理模型"),
+            ),
+        )
+        lower.contains("grok") -> SessionConfigOption(
+            key = "model",
+            label = "模型",
+            category = "model",
+            value = "grok-4",
+            choices = listOf(
+                SessionConfigChoice("grok-4", "Grok 4", "xAI 旗舰推理模型"),
+                SessionConfigChoice("grok-3", "Grok 3", "标准主力模型"),
+                SessionConfigChoice("grok-3-mini", "Grok 3 Mini", "轻量快速思考"),
             ),
         )
         else -> SessionConfigOption(
@@ -1160,47 +1338,48 @@ fun fallbackModelOptionForAgent(agentId: String): SessionConfigOption {
             category = "model",
             value = "default",
             choices = listOf(
-                SessionConfigChoice("default", "默认模型"),
+                SessionConfigChoice("default", "默认模型 (跟随电脑端配置)", "使用电脑端当前配置的默认模型"),
+                SessionConfigChoice("claude-sonnet-4-6", "Claude Sonnet 4.6", "通用主力代码模型"),
+                SessionConfigChoice("claude-opus-4-6", "Claude Opus 4.6", "深度推理旗舰"),
+                SessionConfigChoice("gpt-5.4", "GPT-5.4", "OpenAI 旗舰模型"),
+                SessionConfigChoice("gemini-2.5-pro", "Gemini 2.5 Pro", "Google 旗舰模型"),
             ),
         )
     }
 }
 
-private fun ensureAgentDefaultOptions(
-    agentId: String,
-    options: List<SessionConfigOption>,
-): List<SessionConfigOption> {
-    val result = options.toMutableList()
-    val hasModel = result.any {
-        val k = it.key.lowercase()
-        val c = it.category.lowercase()
-        (c == "model" || k == "model" || k.contains("model")) && it.choices.isNotEmpty()
+private val SQLITE_UTC_FORMATTER: DateTimeFormatter = DateTimeFormatterBuilder()
+    .appendPattern("yyyy-MM-dd HH:mm:ss")
+    .optionalStart()
+    .appendFraction(ChronoField.NANO_OF_SECOND, 1, 9, true)
+    .optionalEnd()
+    .toFormatter()
+
+fun parseHostTimestampEpochMillis(raw: String?): Long? {
+    val trimmed = raw?.trim().orEmpty()
+    if (trimmed.isEmpty()) return null
+    runCatching { return Instant.parse(trimmed).toEpochMilli() }
+    runCatching { return OffsetDateTime.parse(trimmed).toInstant().toEpochMilli() }
+    runCatching {
+        val normalized = trimmed.removeSuffix("Z").removeSuffix("z").trim()
+        return LocalDateTime.parse(normalized, SQLITE_UTC_FORMATTER)
+            .toInstant(ZoneOffset.UTC)
+            .toEpochMilli()
     }
-    if (!hasModel) {
-        result.add(0, fallbackModelOptionForAgent(agentId))
-    }
-    val hasEffort = result.any {
-        val k = it.key.lowercase()
-        val c = it.category.lowercase()
-        c.contains("thought") || c.contains("effort") || c.contains("reason") ||
-            k.contains("thought") || k.contains("effort") || k.contains("thinking") || k.contains("reason")
-    }
-    if (!hasEffort) {
-        result.add(
-            SessionConfigOption(
-                key = "reasoning_effort",
-                label = "推理强度",
-                category = "thought_level",
-                value = "medium",
-                choices = listOf(
-                    SessionConfigChoice("low", "低"),
-                    SessionConfigChoice("medium", "中"),
-                    SessionConfigChoice("high", "高"),
-                ),
-            ),
-        )
-    }
-    return result
+    return null
+}
+
+val KanbanSessionSummary.updatedEpochMs: Long?
+    get() = parseHostTimestampEpochMillis(updatedAt) ?: parseHostTimestampEpochMillis(createdAt)
+
+fun KanbanSessionSummary.isRecentlyActiveReadSession(
+    manuallyCompletedIds: Set<String>,
+    nowMs: Long = System.currentTimeMillis(),
+): Boolean {
+    if (status != KanbanSessionStatus.Done || isRunning) return false
+    if (id in manuallyCompletedIds) return false
+    val epochMs = updatedEpochMs ?: return false
+    return (nowMs - epochMs) <= 24L * 3600_000L
 }
 
 fun encodeObject(map: Map<String, Any?>): String = encodeValue(map).encode()

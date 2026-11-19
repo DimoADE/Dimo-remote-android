@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,23 +25,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
-import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.ContentCopy
-import androidx.compose.material.icons.rounded.EditNote
-import androidx.compose.material.icons.rounded.Folder
-import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
-import androidx.compose.material.icons.rounded.MoreHoriz
-import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,6 +37,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -61,7 +51,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -69,7 +59,6 @@ import androidx.compose.ui.unit.sp
 import dev.vibex.companion.CatalogAgent
 import dev.vibex.companion.FileChangeItem
 import dev.vibex.companion.QueuedInput
-import dev.vibex.companion.SessionConfigOption
 import dev.vibex.companion.TimelineItem
 import dev.vibex.companion.TimelineSegment
 import dev.vibex.companion.agentDisplayName
@@ -85,6 +74,9 @@ private val RunningOrange = Color(0xFFFF9500)
 
 /**
  * 1:1 port of iOS `ConversationDetailView` (`ConversationDetailView.swift`).
+ * Uses `FloatingCircleBackButton` + left-aligned title/model header + `WorkspaceDualToolsCapsule`,
+ * instant optimistic `isThinkingOrRunning` feedback, auto-mark-viewed when a turn finishes while
+ * watching, and the unified single-capsule `PromptBar`.
  */
 @Composable
 fun TimelinePane(
@@ -96,6 +88,11 @@ fun TimelinePane(
     val colors = VibexTheme.colors
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
+
+    val handleBack = remember(onBack, model) {
+        onBack ?: { model.go(Route.Conversations) }
+    }
+    BackHandler(onBack = handleBack)
 
     val view = state.timeline?.takeIf { it.conversationId == conversationId }
     val summary = state.conversations.find { it.id == conversationId }
@@ -119,11 +116,7 @@ fun TimelinePane(
     val configOptions = view?.sessionConfig?.takeIf { it.isNotEmpty() } ?: agent?.sessionConfig.orEmpty()
 
     val currentModelLabel = remember(configOptions, agent, agentId) {
-        val modelOpt = configOptions.firstOrNull { opt ->
-            val k = opt.key.lowercase()
-            val c = opt.category.lowercase()
-            c == "model" || k == "model" || k.contains("model")
-        }
+        val modelOpt = findSettingsModelOption(configOptions)
         val selected = modelOpt?.choices?.firstOrNull { it.value == modelOpt.value }?.label ?: modelOpt?.value
         selected?.takeIf { it.isNotBlank() }
             ?: agent?.displayName?.takeIf { it.isNotBlank() }
@@ -131,37 +124,54 @@ fun TimelinePane(
     }
 
     val items = view?.items.orEmpty()
-    val isTurnRunning = view?.inFlightTurnId != null
+    val isTurnRunning = view?.isThinkingOrRunning == true
 
     var workspaceDiffCount by remember(conversationId, workspaceId) { mutableIntStateOf(0) }
-    LaunchedEffect(conversationId, workspaceId, isTurnRunning) {
-        if (workspaceId.isNotBlank() && !isTurnRunning) {
-            model.fetchWorkspaceDiff(workspaceId, conversationId) { result ->
-                result.getOrNull()?.let { diffs ->
-                    workspaceDiffCount = diffs.size
-                }
+    var workspaceAdditions by remember(conversationId, workspaceId) { mutableLongStateOf(0L) }
+    var workspaceDeletions by remember(conversationId, workspaceId) { mutableLongStateOf(0L) }
+    var wasTurnRunning by remember(conversationId) { mutableStateOf(false) }
+
+    fun refreshDiffSummary() {
+        if (workspaceId.isBlank()) return
+        model.fetchWorkspaceDiff(workspaceId, conversationId) { result ->
+            result.getOrNull()?.let { diffs ->
+                workspaceDiffCount = diffs.size
+                workspaceAdditions = diffs.sumOf { it.additions.toLong() }
+                workspaceDeletions = diffs.sumOf { it.deletions.toLong() }
             }
         }
     }
+
+    LaunchedEffect(conversationId, workspaceId) {
+        refreshDiffSummary()
+    }
+
+    LaunchedEffect(conversationId, isTurnRunning) {
+        if (wasTurnRunning && !isTurnRunning) {
+            if (view?.permissionPrompt == null && view?.pendingQuestion == null) {
+                model.markSessionViewed(conversationId)
+            }
+            refreshDiffSummary()
+        }
+        wasTurnRunning = isTurnRunning
+    }
+
     val totalChangeCount = remember(workspaceDiffCount, view?.fileChanges, items) {
         val turnChanges = items.flatMap { it.changes }.map { it.path }.toSet().size
         maxOf(workspaceDiffCount, view?.fileChanges?.size ?: 0, turnChanges)
     }
 
-    var input by remember(conversationId) { mutableStateOf("") }
-    var menu by remember(conversationId) { mutableStateOf<ComposerMenu?>(null) }
-    BackHandler(enabled = menu != null) {
-        menu = null
-    }
     var respondingPermission by remember(conversationId) { mutableStateOf(false) }
     var respondingQuestion by remember(conversationId) { mutableStateOf(false) }
+    var openSettingsTrigger by remember(conversationId) { mutableIntStateOf(0) }
 
     var showFiles by remember { mutableStateOf(false) }
     var showDiff by remember { mutableStateOf(false) }
     var diffTarget by remember { mutableStateOf<FileChangeItem?>(null) }
     var showSessionSheet by remember { mutableStateOf(false) }
-    var showNewConvSheet by remember { mutableStateOf(false) }
-    var moreMenuExpanded by remember { mutableStateOf(false) }
+    var showMoreMenu by remember { mutableStateOf(false) }
+    var showHandoff by remember { mutableStateOf(false) }
+    var showSideChat by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
     var pinnedToBottom by remember(conversationId) { mutableStateOf(true) }
@@ -191,7 +201,7 @@ fun TimelinePane(
 
     val tailSignature = remember(items, isTurnRunning) {
         val last = items.lastOrNull()
-        "${items.size}:${last?.id}:${last?.text?.length}:${last?.thinking?.length}:${last?.tools?.size}:${isTurnRunning}"
+        "${items.size}:${last?.id}:${last?.text?.length}:${last?.thinking?.length}:${last?.tools?.size}:$isTurnRunning"
     }
 
     LaunchedEffect(tailSignature) {
@@ -207,153 +217,127 @@ fun TimelinePane(
 
     val conversationTitle = view?.title?.takeIf { it.isNotBlank() }
         ?: summary?.title?.takeIf { it.isNotBlank() }
-        ?: "对话"
+        ?: "未命名会话"
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(colors.bg)
             .navigationBarsPadding()
             .imePadding(),
     ) {
-        // Embedded Header Bar (1:1 iOS `embeddedHeaderBar`)
+        // Level-2 Header Bar (1:1 iOS `levelTwoHeaderBar`)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(colors.card)
-                    .border(0.6.dp, colors.textPrimary.copy(alpha = 0.08f), CircleShape)
-                    .clickable {
-                        if (onBack != null) onBack() else model.openNewChatLanding()
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = "返回对话列表",
-                    tint = colors.textPrimary,
-                    modifier = Modifier.size(17.dp),
-                )
-            }
+            FloatingCircleBackButton(onClick = handleBack)
 
             Column(
                 modifier = Modifier.weight(1f),
-                horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { showSessionSheet = true },
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (isTurnRunning) {
                         Box(
                             modifier = Modifier
-                                .size(6.5.dp)
+                                .size(7.dp)
                                 .clip(CircleShape)
                                 .background(RunningOrange),
                         )
                     }
                     Text(
                         text = conversationTitle,
-                        fontSize = 15.5.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 16.5.sp,
+                        fontWeight = FontWeight.Bold,
                         color = colors.textPrimary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { openSettingsTrigger += 1 },
+                    horizontalArrangement = Arrangement.spacedBy(4.5.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     AgentAvatar(
                         agentId = agentId,
-                        size = 11.dp,
+                        size = 11.5.dp,
                         iconSvg = agent?.iconSvg,
                         displayName = agent?.displayName.orEmpty(),
                     )
                     Text(
                         text = currentModelLabel,
-                        fontSize = 11.sp,
+                        fontSize = 11.5.sp,
                         fontWeight = FontWeight.Medium,
                         color = colors.textSecondary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    Icon(
+                        imageVector = Icons.Rounded.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = colors.textTertiary,
+                        modifier = Modifier.size(12.dp),
+                    )
                 }
             }
 
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
+            WorkspaceDualToolsCapsule(
+                diffCount = totalChangeCount,
+                additionCount = workspaceAdditions,
+                deletionCount = workspaceDeletions,
+                enabled = workspaceId.isNotBlank(),
+                onOpenDiff = { showDiff = true },
+                onOpenFiles = { showFiles = true },
+            )
+
+            Box {
+                Text(
+                    text = "⋯",
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary,
                     modifier = Modifier
-                        .size(36.dp)
                         .clip(CircleShape)
-                        .background(colors.card)
-                        .border(0.6.dp, colors.textPrimary.copy(alpha = 0.08f), CircleShape)
-                        .clickable { model.openNewChatLanding() },
-                    contentAlignment = Alignment.Center,
+                        .clickable { showMoreMenu = true }
+                        .padding(horizontal = 8.dp),
+                )
+                androidx.compose.material3.DropdownMenu(
+                    expanded = showMoreMenu,
+                    onDismissRequest = { showMoreMenu = false },
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.EditNote,
-                        contentDescription = "新建对话",
-                        tint = colors.textPrimary,
-                        modifier = Modifier.size(17.dp),
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = { Text("切换引擎…") },
+                        enabled = state.connection.allowsWrites && !isTurnRunning,
+                        onClick = {
+                            showMoreMenu = false
+                            model.openHandoff(conversationId)
+                            showHandoff = true
+                        },
                     )
-                }
-
-                Box {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(colors.card)
-                            .border(0.6.dp, colors.textPrimary.copy(alpha = 0.08f), CircleShape)
-                            .clickable { moreMenuExpanded = true },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.MoreHoriz,
-                            contentDescription = "更多操作",
-                            tint = colors.textPrimary,
-                            modifier = Modifier.size(17.dp),
-                        )
-                    }
-
-                    DropdownMenu(
-                        expanded = moreMenuExpanded,
-                        onDismissRequest = { moreMenuExpanded = false },
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("查看代码变更 (Diff)", fontSize = 14.sp) },
-                            leadingIcon = { Icon(Icons.Rounded.Code, null, modifier = Modifier.size(18.dp)) },
-                            onClick = {
-                                moreMenuExpanded = false
-                                showDiff = true
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("会话信息与操作", fontSize = 14.sp) },
-                            leadingIcon = { Icon(Icons.Rounded.Info, null, modifier = Modifier.size(18.dp)) },
-                            onClick = {
-                                moreMenuExpanded = false
-                                showSessionSheet = true
-                            },
-                        )
-                    }
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = { Text("旁路对话") },
+                        onClick = {
+                            showMoreMenu = false
+                            showSideChat = true
+                        },
+                    )
                 }
             }
         }
-
-        HorizontalDivider(thickness = 0.5.dp, color = colors.stroke)
 
         // Session Notices
         view?.notices.orEmpty().forEach { item ->
@@ -364,16 +348,25 @@ fun TimelinePane(
             )
         }
 
+        view?.rateLimit?.let { limit ->
+            RateLimitRecoveryBanner(
+                banner = limit,
+                agentId = agentId,
+                writable = state.connection.allowsWrites,
+                onAutoResume = { model.setRateLimitAutoResume(conversationId, true) },
+                onCancelWait = { model.cancelRateLimitWait(conversationId) },
+            )
+        }
+
         // Main Timeline + Floating Scroll-to-Bottom Button
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
                 .clickable(
-                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    interactionSource = remember { MutableInteractionSource() },
                     indication = null,
                 ) {
-                    if (menu != null) menu = null
                     focusManager.clearFocus()
                 },
         ) {
@@ -385,7 +378,7 @@ fun TimelinePane(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = "发送第一条消息开始对话",
+                        text = "还没有消息",
                         fontSize = 14.sp,
                         color = colors.textSecondary,
                     )
@@ -501,53 +494,47 @@ fun TimelinePane(
             )
         }
 
-        if (totalChangeCount > 0) {
-            ChangesSummaryBar(
-                count = totalChangeCount,
-                onOpenDiff = { showDiff = true },
-                onOpenFiles = { showFiles = true },
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-            )
+        if (isTurnRunning) {
+            SteeringHint(canSteer = view?.canSteer == true, known = view?.steeringKnown == true)
         }
 
-        // PromptBar (`PromptBar.kt`)
+        // Unified Single-Capsule PromptBar (`PromptBar.kt`)
         PromptBar(
-            text = input,
-            onTextChange = { input = it },
-            menu = menu,
-            onMenuChange = { menu = it },
+            conversationKey = conversationId,
             agentId = agentId,
             agent = agent,
             agents = state.catalog?.agents.orEmpty(),
-            onAddCustomModel = { rawModel ->
-                val trimmed = rawModel.trim()
-                if (trimmed.isNotEmpty()) {
-                    val modelKey = configOptions.firstOrNull {
-                        val k = it.key.lowercase()
-                        val c = it.category.lowercase()
-                        c == "model" || k == "model" || k.contains("model")
-                    }?.key ?: "model"
-                    model.setSessionConfig(conversationId, modelKey, trimmed)
-                }
-            },
+            allowCrossAgentSwitch = false,
             modes = modes,
             currentModeId = currentModeId,
             configOptions = configOptions,
+            modelPrefs = model.modelPrefs,
             isStreaming = isTurnRunning,
+            hasAlert = view?.permissionPrompt != null,
             enabled = state.connection.allowsWrites,
-            onSend = {
-                val trimmed = input.trim()
-                if (trimmed.isNotEmpty()) {
-                    input = ""
-                    pinnedToBottom = true
-                    unreadUpdates = 0
-                    model.send(conversationId, trimmed)
+            openSettingsTrigger = openSettingsTrigger,
+            onSubmit = { text ->
+                pinnedToBottom = true
+                unreadUpdates = 0
+                if (isTurnRunning && view?.canSteer == true) {
+                    model.steer(conversationId, text)
+                } else {
+                    model.send(conversationId, text)
                 }
             },
             onStop = { model.cancel(conversationId) },
+            onSelectAgentAndModel = { _, key, value ->
+                model.setSessionConfig(conversationId, key, value)
+            },
             onSelectMode = { modeId -> model.setSessionMode(conversationId, modeId) },
             onSelectOption = { key, value -> model.setSessionConfig(conversationId, key, value) },
-            onOpenFileBrowser = { showFiles = true },
+            onOpenFileBrowser = if (workspaceId.isNotBlank()) {
+                { showFiles = true }
+            } else {
+                null
+            },
+            onCompact = { model.compact(conversationId) },
+            onRefreshCatalog = { model.loadCatalogSilent() },
         )
     }
 
@@ -581,20 +568,30 @@ fun TimelinePane(
         )
     }
 
+    if (showHandoff) {
+        dev.vibex.companion.app.ui.timeline.EngineHandoffSheet(
+            state = state,
+            currentAgentId = agentId,
+            model = model,
+            onDismiss = { showHandoff = false },
+        )
+    }
+
+    if (showSideChat) {
+        dev.vibex.companion.app.ui.timeline.SideChatSheet(
+            conversationId = conversationId,
+            items = items,
+            model = model,
+            onDismiss = { showSideChat = false },
+        )
+    }
+
     if (showSessionSheet) {
         SessionInfoSheet(
             state = state,
             conversationId = conversationId,
             model = model,
             onDismiss = { showSessionSheet = false },
-        )
-    }
-
-    if (showNewConvSheet) {
-        NewConversationSheet(
-            state = state,
-            model = model,
-            onDismiss = { showNewConvSheet = false },
         )
     }
 }
@@ -612,6 +609,7 @@ fun MessageRow(
     val colors = VibexTheme.colors
 
     when (item.role) {
+        TimelineItem.Role.Divider -> HandoffDivider(item.text)
         TimelineItem.Role.User -> {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -666,7 +664,6 @@ fun MessageRow(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                // Desktop-style `> Worked for Xh Ym` Collapsible Process Group (`MessageTurnView.tsx:537-595`)
                 if (hasProcessSteps) {
                     Row(
                         modifier = Modifier
@@ -686,9 +683,12 @@ fun MessageRow(
                         )
                         Text(
                             text = workedForLabel,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = colors.textSecondary,
+                            style = TextStyle(
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                fontFeatureSettings = "tnum",
+                                color = colors.textSecondary,
+                            ),
                         )
                         if (item.streaming) {
                             Box(
@@ -741,7 +741,6 @@ fun MessageRow(
                     }
                 }
 
-                // Assistant Markdown Answer
                 textSegments.forEachIndexed { idx, segment ->
                     val isLastText = idx == textSegments.lastIndex
                     StreamingMessageText(
@@ -755,62 +754,6 @@ fun MessageRow(
                     LoadingState(label = "正在思考")
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun ChangesSummaryBar(
-    count: Int,
-    onOpenDiff: () -> Unit,
-    onOpenFiles: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val colors = VibexTheme.colors
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Row(
-            modifier = Modifier
-                .clip(CircleShape)
-                .background(colors.card)
-                .border(0.75.dp, colors.textPrimary.copy(alpha = 0.10f), CircleShape)
-                .clickable(onClick = onOpenDiff)
-                .padding(horizontal = 10.dp, vertical = 5.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.Settings,
-                contentDescription = null,
-                tint = colors.textSecondary,
-                modifier = Modifier.size(12.dp),
-            )
-            Text(
-                text = "$count CHANGES",
-                fontSize = 11.5.sp,
-                fontWeight = FontWeight.SemiBold,
-                fontFamily = FontFamily.Monospace,
-                color = colors.textPrimary.copy(alpha = 0.88f),
-            )
-        }
-
-        Box(
-            modifier = Modifier
-                .size(26.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .background(colors.card)
-                .clickable(onClick = onOpenFiles),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.Folder,
-                contentDescription = "浏览文件",
-                tint = colors.textSecondary,
-                modifier = Modifier.size(14.dp),
-            )
         }
     }
 }
@@ -938,9 +881,12 @@ private fun ScrollToBottomButton(
         if (label != null) {
             Text(
                 text = label,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = colors.textPrimary,
+                style = TextStyle(
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFeatureSettings = "tnum",
+                    color = colors.textPrimary,
+                ),
             )
         }
         Icon(
@@ -971,9 +917,12 @@ private fun QueuedStrip(
     ) {
         Text(
             text = "排队中 (${items.size})",
-            fontSize = 11.5.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = colors.textSecondary,
+            style = TextStyle(
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFeatureSettings = "tnum",
+                color = colors.textSecondary,
+            ),
         )
         items.forEach { item ->
             Row(

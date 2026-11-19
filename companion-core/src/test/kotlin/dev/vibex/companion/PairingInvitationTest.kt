@@ -34,7 +34,17 @@ class PairingInvitationTest {
 
     @Test
     fun rejectsNonInvitation() {
-        assertFailsWith<PairingException> { PairingInvitationParser.parse("http://192.168.1.1:3080") }
+        val err = assertFailsWith<PairingException> { PairingInvitationParser.parse("http://192.168.1.1:3080") }
+        assertEquals("这不是 Dimo 邀请", err.message)
+    }
+
+    @Test
+    fun parsesDimoPairingPayload() {
+        val invitation = PairingInvitationParser.parse(
+            """dimo-pairing:{"host_id":"h2","preset":"companion","pairing_token":"vbx_pair_xyz","reachability":[{"origin":"http://192.168.1.9:17891","kind":"lan"}]}""",
+        )
+        assertEquals("h2", invitation.hostId)
+        assertEquals(listOf("http://192.168.1.9:17891"), invitation.reachability.map { it.origin.value })
     }
 
     @Test

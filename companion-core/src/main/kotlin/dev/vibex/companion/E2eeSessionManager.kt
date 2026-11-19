@@ -18,20 +18,20 @@ import javax.crypto.spec.SecretKeySpec
  * between the Android Companion client and a paired VibeX Host.
  */
 object E2eeSessionManager {
-    const val HEADER_E2EE = "x-vibex-e2ee"
-    const val HEADER_CLIENT_PUB = "x-vibex-e2ee-client-pub"
-    const val HEADER_SERVER_PUB = "x-vibex-e2ee-server-pub"
-    const val HEADER_SESSION = "x-vibex-e2ee-session"
-    const val HEADER_AUTH = "x-vibex-e2ee-auth"
+    const val HEADER_E2EE = "x-dimo-e2ee"
+    const val HEADER_CLIENT_PUB = "x-dimo-e2ee-client-pub"
+    const val HEADER_SERVER_PUB = "x-dimo-e2ee-server-pub"
+    const val HEADER_SESSION = "x-dimo-e2ee-session"
+    const val HEADER_AUTH = "x-dimo-e2ee-auth"
     const val VERSION = "v1"
 
-    private val HKDF_SALT = "vibex-e2ee-v1-salt".toByteArray(Charsets.UTF_8)
-    private val HKDF_INFO = "vibex-e2ee-v1-aes256gcm".toByteArray(Charsets.UTF_8)
+    private val HKDF_SALT = "dimo-e2ee-v1-salt".toByteArray(Charsets.UTF_8)
+    private val HKDF_INFO = "dimo-e2ee-v1-aes256gcm".toByteArray(Charsets.UTF_8)
 
-    val AAD_AUTH = "vibex-e2ee-auth-v1".toByteArray(Charsets.UTF_8)
-    val AAD_REQ = "vibex-e2ee-req-v1".toByteArray(Charsets.UTF_8)
-    val AAD_RESP = "vibex-e2ee-resp-v1".toByteArray(Charsets.UTF_8)
-    val AAD_WS = "vibex-e2ee-ws-v1".toByteArray(Charsets.UTF_8)
+    val AAD_AUTH = "dimo-e2ee-auth-v1".toByteArray(Charsets.UTF_8)
+    val AAD_REQ = "dimo-e2ee-req-v1".toByteArray(Charsets.UTF_8)
+    val AAD_RESP = "dimo-e2ee-resp-v1".toByteArray(Charsets.UTF_8)
+    val AAD_WS = "dimo-e2ee-ws-v1".toByteArray(Charsets.UTF_8)
 
     // ASN.1 DER SubjectPublicKeyInfo prefix for NIST P-256 (secp256r1) uncompressed 65-byte point
     private val P256_SPKI_PREFIX = byteArrayOf(
@@ -82,6 +82,10 @@ object E2eeSessionManager {
 
     fun isE2eeActive(urlOrOrigin: String): Boolean =
         session(urlOrOrigin) != null
+
+    fun clearSession(urlOrOrigin: String) {
+        sessionsByOrigin.remove(originKey(urlOrOrigin))
+    }
 
     fun ingestHandshake(
         urlOrOrigin: String,

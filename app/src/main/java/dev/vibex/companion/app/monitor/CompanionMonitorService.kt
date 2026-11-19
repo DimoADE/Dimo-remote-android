@@ -45,9 +45,18 @@ import dev.vibex.companion.app.ui.DynamicIslandOverlay
 import dev.vibex.companion.app.ui.theme.Appearance
 import dev.vibex.companion.app.ui.theme.AccentChoice
 import dev.vibex.companion.app.ui.theme.CompanionTheme
+import dev.vibex.companion.app.update.AppUpdateManager
 import kotlinx.coroutines.flow.MutableStateFlow
 
 class CompanionMonitorService : Service() {
+    private val updatePollHandler = Handler(Looper.getMainLooper())
+    private val updatePollRunnable = object : Runnable {
+        override fun run() {
+            AppUpdateManager.getInstance(this@CompanionMonitorService).checkIfDue(fromBackground = true)
+            updatePollHandler.postDelayed(this, UPDATE_POLL_INTERVAL_MS)
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -55,7 +64,7 @@ class CompanionMonitorService : Service() {
         val manager = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26) {
             manager.createNotificationChannel(
-                NotificationChannel(CHANNEL, "VibeX 后台实时同步", NotificationManager.IMPORTANCE_LOW).apply {
+                NotificationChannel(CHANNEL, "Dimo 后台实时同步", NotificationManager.IMPORTANCE_LOW).apply {
                     description = "保持后台连接以驱动系统灵动岛与即时通知"
                     setShowBadge(false)
                 },
@@ -71,7 +80,7 @@ class CompanionMonitorService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL)
-            .setContentTitle("VibeX 后台守护中")
+            .setContentTitle("Dimo 后台守护中")
             .setContentText("正在实时同步 AI 任务进度与通知")
             .setSmallIcon(R.mipmap.ic_launcher_round)
             .setOngoing(true)
@@ -79,15 +88,19 @@ class CompanionMonitorService : Service() {
             .setContentIntent(pendingIntent)
             .build()
         startForeground(1, notification)
+        updatePollHandler.postDelayed(updatePollRunnable, UPDATE_POLL_INITIAL_DELAY_MS)
     }
 
     override fun onDestroy() {
+        updatePollHandler.removeCallbacks(updatePollRunnable)
         SystemIslandOverlayController.detach()
         super.onDestroy()
     }
 
     companion object {
         private const val CHANNEL = "vibex-monitor"
+        private const val UPDATE_POLL_INITIAL_DELAY_MS = 60_000L
+        private const val UPDATE_POLL_INTERVAL_MS = 15 * 60 * 1000L
 
         fun start(context: Context) {
             runCatching {

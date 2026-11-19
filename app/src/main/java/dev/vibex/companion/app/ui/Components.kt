@@ -1,5 +1,6 @@
 package dev.vibex.companion.app.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.combinedClickable
@@ -31,9 +32,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -67,6 +71,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.vibex.companion.ConnectionState
@@ -118,7 +123,7 @@ fun CompanionRefresh(
 @Composable
 fun BrandMark(size: Dp = 72.dp) {
     val res = if (VibexTheme.colors.isDark) R.drawable.logo_dark else R.drawable.logo_light
-    Image(painterResource(res), "VibeX", Modifier.size(size))
+    Image(painterResource(res), "Dimo", Modifier.size(size))
 }
 
 @Composable
@@ -500,6 +505,102 @@ fun connectionLabel(connection: ConnectionState): String = when (connection) {
     ConnectionState.Offline -> "电脑离线"
 }
 
+
+@Composable
+fun VibexDropdownMenu(
+    expanded: Boolean,
+    onDismissRequest: () -> Unit,
+    modifier: Modifier = Modifier,
+    offset: DpOffset = DpOffset(0.dp, 6.dp),
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val colors = VibexTheme.colors
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismissRequest,
+        offset = offset,
+        shape = RoundedCornerShape(16.dp),
+        containerColor = colors.card,
+        tonalElevation = 0.dp,
+        shadowElevation = 12.dp,
+        border = BorderStroke(0.75.dp, colors.stroke),
+        modifier = modifier.widthIn(min = 188.dp, max = 280.dp),
+        content = content,
+    )
+}
+
+@Composable
+fun VibexDropdownMenuItem(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    leadingIcon: ImageVector? = null,
+    leadingDotColor: Color? = null,
+    selected: Boolean = false,
+    tint: Color? = null,
+    enabled: Boolean = true,
+) {
+    val colors = VibexTheme.colors
+    val contentColor = when {
+        !enabled -> colors.textTertiary
+        selected -> colors.accent
+        tint != null -> tint
+        else -> colors.textPrimary
+    }
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 6.dp, vertical = 1.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (selected) colors.accentDim else Color.Transparent)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        if (leadingDotColor != null) {
+            Box(
+                modifier = Modifier
+                    .size(12.dp)
+                    .clip(CircleShape)
+                    .background(leadingDotColor),
+            )
+        } else if (leadingIcon != null) {
+            Icon(
+                imageVector = leadingIcon,
+                contentDescription = null,
+                tint = if (selected || tint != null || !enabled) contentColor else colors.textSecondary,
+                modifier = Modifier.size(17.dp),
+            )
+        }
+        Text(
+            text = text,
+            fontSize = 14.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            color = contentColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (selected) {
+            Icon(
+                imageVector = Icons.Rounded.Check,
+                contentDescription = null,
+                tint = colors.accent,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+    }
+}
+
+@Composable
+fun VibexDropdownDivider() {
+    HorizontalDivider(
+        color = VibexTheme.colors.hairline,
+        thickness = 0.6.dp,
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+    )
+}
 
 @Composable
 fun GlassMenu(

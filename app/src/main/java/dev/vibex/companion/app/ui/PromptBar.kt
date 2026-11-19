@@ -1,1439 +1,714 @@
 package dev.vibex.companion.app.ui
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.expandVertically
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.ChevronLeft
-import androidx.compose.material.icons.rounded.CreateNewFolder
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Compress
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
-import androidx.compose.material.icons.rounded.PhotoCamera
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.PhotoLibrary
-import androidx.compose.material.icons.rounded.VerifiedUser
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import coil.compose.AsyncImage
 import dev.vibex.companion.CatalogAgent
-import dev.vibex.companion.SessionConfigChoice
 import dev.vibex.companion.SessionConfigOption
 import dev.vibex.companion.SessionMode
-import dev.vibex.companion.agentDisplayName
-import dev.vibex.companion.bundledAgentAsset
+import dev.vibex.companion.app.data.ModelPreferencesStore
 import dev.vibex.companion.app.ui.theme.VibexTheme
-import kotlin.math.roundToInt
+import java.util.Locale
+import java.util.UUID
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 enum class ComposerMenu { Plus, Agent, Model, Effort }
 
-private enum class PlusPanel { Grid, Agent, Model, Mode, Permission }
+private data class AttachedMediaChip(
+    val id: String = UUID.randomUUID().toString(),
+    val uriString: String,
+    val label: String,
+)
 
-private val SparkColor = Color(red = 0.62f, green = 0.30f, blue = 0.96f)
-private val WarningOrange = Color(0xFFFF9500)
-
-private val SessionConfigOption.currentLabel: String
-    get() = choices.firstOrNull { it.value == value }?.label ?: value.ifBlank { label }
-
-private fun findModelOption(options: List<SessionConfigOption>): SessionConfigOption? =
-    options.firstOrNull { opt ->
-        val k = opt.key.lowercase()
-        val c = opt.category.lowercase()
-        c == "model" || k == "model" || k.contains("model")
-    }
-
-private fun findEffortOption(options: List<SessionConfigOption>): SessionConfigOption? =
-    options.firstOrNull { opt ->
-        val k = opt.key.lowercase()
-        val c = opt.category.lowercase()
-        c.contains("thought") || c.contains("effort") || c.contains("reason") ||
-            k.contains("thought") || k.contains("effort") || k.contains("thinking") || k.contains("reason")
-    }
-
-private fun findPermissionOption(options: List<SessionConfigOption>): SessionConfigOption? =
-    options.firstOrNull { opt ->
-        val k = opt.key.lowercase()
-        val c = opt.category.lowercase()
-        c.contains("permission") || c.contains("approval") || c.contains("sandbox") ||
-            k.contains("permission") || k.contains("approval") || k.contains("sandbox") || k.contains("ask")
-    }
+private val SparkColor = Color(red = 0.70f, green = 0.62f, blue = 1.0f)
+private val AlertOrange = Color(0xFFFF9500)
+private val RecordingRed = Color(0xFFFF3B30)
 
 /**
  * 1:1 port of iOS `PromptBar` (`PromptBar.swift`).
+ * Unified single-capsule floating composer (`[ + | Multiline BasicTextField | AgentIcon ⌄ | Mic | 36dp Circular ↑/■ ]`)
+ * with composer-local zero-lag text editing, live speech dictation (`SpeechRecognizer`),
+ * and `ThreadSettingsSheet` (`会话设置`) modal integration.
  */
 @Composable
 fun PromptBar(
-    text: String,
-    onTextChange: (String) -> Unit,
-    menu: ComposerMenu?,
-    onMenuChange: (ComposerMenu?) -> Unit,
+    conversationKey: String = "default",
+    externalDraftSeed: String = "",
+    externalSeedVersion: Int = 0,
+    onDraftEmptyChanged: ((Boolean) -> Unit)? = null,
     agentId: String,
     agent: CatalogAgent? = null,
     agents: List<CatalogAgent> = emptyList(),
-    showAgentSelector: Boolean = false,
-    onSelectAgent: ((String) -> Unit)? = null,
-    onAddCustomModel: ((String) -> Unit)? = null,
+    allowCrossAgentSwitch: Boolean = false,
     modes: List<SessionMode>,
     currentModeId: String,
     configOptions: List<SessionConfigOption>,
+    modelPrefs: ModelPreferencesStore,
     isStreaming: Boolean,
+    hasAlert: Boolean = false,
     enabled: Boolean = true,
-    onSend: () -> Unit,
+    placeholder: String = "发消息或提问…",
+    onSubmit: (String) -> Unit,
     onStop: () -> Unit,
+    onSelectAgentAndModel: (agentId: String, modelKey: String, modelValue: String) -> Unit,
     onSelectMode: (String) -> Unit,
-    onSelectOption: (String, String) -> Unit,
+    onSelectOption: (key: String, value: String) -> Unit,
     onOpenFileBrowser: (() -> Unit)? = null,
-    onFocusChange: (Boolean) -> Unit = {},
+    onCompact: (() -> Unit)? = null,
+    onRefreshCatalog: (() -> Unit)? = null,
+    openSettingsTrigger: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val colors = VibexTheme.colors
+    val context = LocalContext.current
     val focusManager = LocalFocusManager.current
-    var plusPanel by remember { mutableStateOf(PlusPanel.Grid) }
-    var showCustomModelDialog by remember { mutableStateOf(false) }
-    var customModelDraft by remember { mutableStateOf("") }
+    val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
 
-    val modelOption = remember(configOptions) { findModelOption(configOptions) }
-    val effortOption = remember(configOptions) { findEffortOption(configOptions) }
-    val permissionOption = remember(configOptions) { findPermissionOption(configOptions) }
+    // Composer-local text buffer avoids round-tripping every keystroke through ViewModel StateFlow
+    var localText by remember(conversationKey) { mutableStateOf(externalDraftSeed) }
+    var lastAppliedSeedVersion by remember(conversationKey) { mutableIntStateOf(0) }
+    var attachedMedia by remember(conversationKey) { mutableStateOf<List<AttachedMediaChip>>(emptyList()) }
+    var plusMenuExpanded by remember { mutableStateOf(false) }
+    var showThreadSettingsSheet by remember { mutableStateOf(false) }
 
-    val agentLabel = remember(agent, agentId) {
-        agent?.displayName?.takeIf { it.isNotBlank() }
-            ?: agentDisplayName(agentId, "")
+    LaunchedEffect(externalDraftSeed, externalSeedVersion) {
+        if (externalSeedVersion > lastAppliedSeedVersion) {
+            lastAppliedSeedVersion = externalSeedVersion
+            localText = externalDraftSeed
+            onDraftEmptyChanged?.invoke(localText.isBlank() && attachedMedia.isEmpty())
+        }
     }
 
-    val modelName = remember(modelOption, agent, agentId) {
-        modelOption?.currentLabel?.takeIf { it.isNotBlank() }
-            ?: "默认模型"
+    var lastSettingsTrigger by remember { mutableIntStateOf(openSettingsTrigger) }
+    LaunchedEffect(openSettingsTrigger) {
+        if (openSettingsTrigger != lastSettingsTrigger) {
+            lastSettingsTrigger = openSettingsTrigger
+            focusManager.clearFocus()
+            onRefreshCatalog?.invoke()
+            showThreadSettingsSheet = true
+        }
     }
 
+    // Photo picker for up to 4 images
+    val photoPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(4),
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            val added = uris.mapIndexed { idx, uri ->
+                AttachedMediaChip(
+                    uriString = uri.toString(),
+                    label = "image-${attachedMedia.size + idx + 1}.jpg",
+                )
+            }
+            attachedMedia = (attachedMedia + added).take(4)
+            onDraftEmptyChanged?.invoke(localText.isBlank() && attachedMedia.isEmpty())
+        }
+    }
+
+    // Live Speech Dictation State (`SpeechRecognizer`)
+    var isRecording by remember { mutableStateOf(false) }
+    var dictationError by remember { mutableStateOf<String?>(null) }
+    var dictationPrefix by remember { mutableStateOf("") }
+    var speechRecognizer by remember { mutableStateOf<SpeechRecognizer?>(null) }
+
+    fun showTempDictationError(msg: String) {
+        dictationError = msg
+        scope.launch {
+            delay(2_800L)
+            if (dictationError == msg) dictationError = null
+        }
+    }
+
+    fun stopDictation() {
+        runCatching {
+            speechRecognizer?.stopListening()
+            speechRecognizer?.cancel()
+            speechRecognizer?.destroy()
+        }
+        speechRecognizer = null
+        isRecording = false
+    }
+
+    fun startDictationNow() {
+        stopDictation()
+        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+            showTempDictationError("当前设备暂不支持实时语音转写")
+            return
+        }
+        val trimmedPrefix = localText.trim()
+        dictationPrefix = if (trimmedPrefix.isEmpty()) "" else "$localText "
+        dictationError = null
+
+        val recognizer = runCatching { SpeechRecognizer.createSpeechRecognizer(context) }.getOrNull()
+        if (recognizer == null) {
+            showTempDictationError("无法初始化语音识别服务")
+            return
+        }
+        recognizer.setRecognitionListener(
+            object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {
+                    isRecording = true
+                }
+
+                override fun onBeginningOfSpeech() = Unit
+                override fun onRmsChanged(rmsdB: Float) = Unit
+                override fun onBufferReceived(buffer: ByteArray?) = Unit
+                override fun onEndOfSpeech() = Unit
+
+                override fun onPartialResults(partialResults: Bundle?) {
+                    val spoken = partialResults
+                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull()
+                        ?.trim()
+                        .orEmpty()
+                    if (spoken.isNotEmpty()) {
+                        localText = dictationPrefix + spoken
+                        onDraftEmptyChanged?.invoke(false)
+                    }
+                }
+
+                override fun onResults(results: Bundle?) {
+                    val spoken = results
+                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull()
+                        ?.trim()
+                        .orEmpty()
+                    if (spoken.isNotEmpty()) {
+                        localText = dictationPrefix + spoken
+                        onDraftEmptyChanged?.invoke(false)
+                    }
+                    stopDictation()
+                }
+
+                override fun onError(error: Int) {
+                    val wasRecording = isRecording
+                    stopDictation()
+                    if (error != SpeechRecognizer.ERROR_CLIENT &&
+                        error != SpeechRecognizer.ERROR_NO_MATCH &&
+                        error != SpeechRecognizer.ERROR_SPEECH_TIMEOUT &&
+                        !wasRecording
+                    ) {
+                        showTempDictationError("语音转写暂不可用，请检查麦克风或语音服务")
+                    }
+                }
+
+                override fun onEvent(eventType: Int, params: Bundle?) = Unit
+            },
+        )
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+        }
+        runCatching {
+            speechRecognizer = recognizer
+            isRecording = true
+            recognizer.startListening(intent)
+        }.onFailure {
+            stopDictation()
+            showTempDictationError("无法启动麦克风录音")
+        }
+    }
+
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            startDictationNow()
+        } else {
+            showTempDictationError("请在系统设置中允许麦克风权限")
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { stopDictation() }
+    }
+
+    val effortOption = remember(configOptions) { findSettingsEffortOption(configOptions) }
     val effortAtMax = remember(effortOption) {
         effortOption != null &&
             effortOption.choices.size > 1 &&
             effortOption.choices.last().value == effortOption.value
     }
 
-    val currentModeName = remember(modes, currentModeId) {
-        modes.firstOrNull { it.id == currentModeId }?.name
-            ?: modes.firstOrNull()?.name
-            ?: "默认"
-    }
+    val canSend = enabled && (localText.trim().isNotEmpty() || attachedMedia.isNotEmpty())
+    val armed = isStreaming || canSend
+    val capsuleShape = RoundedCornerShape(26.dp)
 
-    val currentPermissionLabel = remember(permissionOption, modes, currentModeId) {
-        if (permissionOption != null) return@remember permissionOption.currentLabel
-        val mode = modes.firstOrNull { it.id == currentModeId } ?: return@remember "默认"
-        val lower = "${mode.id} ${mode.name}".lowercase()
-        if (lower.contains("auto") || lower.contains("bypass") || lower.contains("yolo") || lower.contains("full")) {
-            mode.name
-        } else {
-            "默认"
+    fun performSend() {
+        if (isRecording) stopDictation()
+        var composed = localText.trim()
+        if (attachedMedia.isNotEmpty()) {
+            val tags = attachedMedia.joinToString(" ") { "#${it.label}" }
+            val marker = "[图片附件 ×${attachedMedia.size} $tags]"
+            composed = if (composed.isEmpty()) marker else "$composed\n$marker"
         }
+        if (composed.isEmpty() || !enabled) return
+        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        localText = ""
+        attachedMedia = emptyList()
+        onDraftEmptyChanged?.invoke(true)
+        onSubmit(composed)
     }
-
-    val isNonDefaultPermission = remember(permissionOption, currentModeId) {
-        if (permissionOption != null) {
-            val v = permissionOption.value.lowercase()
-            return@remember v.contains("auto") || v.contains("bypass") || v.contains("never") || v.contains("full") || v.contains("yolo")
-        }
-        val m = currentModeId.lowercase()
-        m.contains("auto") || m.contains("bypass") || m.contains("yolo") || m.contains("full")
-    }
-
-    val canSend = enabled && text.trim().isNotEmpty()
-    val dockShape = RoundedCornerShape(22.dp)
-
-    Box(modifier = modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            // Menus above dock (never overlap the input dock)
-            AnimatedVisibility(
-                visible = menu == ComposerMenu.Agent && showAgentSelector && agents.isNotEmpty(),
-                enter = expandVertically(animationSpec = spring(dampingRatio = 0.86f)) + fadeIn(),
-                exit = shrinkVertically(animationSpec = spring(dampingRatio = 0.86f)) + fadeOut(),
-            ) {
-                MenuList(
-                    title = "选择 AI Agent",
-                    choices = agents.map { a ->
-                        SessionConfigChoice(
-                            value = a.id,
-                            label = agentDisplayName(a.id, a.displayName),
-                        )
-                    },
-                    selected = agentId,
-                    leading = { choice ->
-                        val rowAgent = agents.find { it.id.equals(choice.value, ignoreCase = true) }
-                        AgentAvatar(
-                            agentId = choice.value,
-                            size = 16.dp,
-                            iconSvg = rowAgent?.iconSvg,
-                            displayName = rowAgent?.displayName?.ifBlank { choice.label } ?: choice.label,
-                        )
-                    },
-                    onSelect = { value ->
-                        onSelectAgent?.invoke(value)
-                        onMenuChange(null)
-                    },
-                )
-            }
-
-            AnimatedVisibility(
-                visible = menu == ComposerMenu.Model && modelOption != null && (modelOption.choices.isNotEmpty() || onAddCustomModel != null),
-                enter = expandVertically(animationSpec = spring(dampingRatio = 0.86f)) + fadeIn(),
-                exit = shrinkVertically(animationSpec = spring(dampingRatio = 0.86f)) + fadeOut(),
-            ) {
-                if (modelOption != null) {
-                    MenuList(
-                        title = modelOption.label,
-                        choices = modelOption.choices,
-                        selected = modelOption.value,
-                        leading = { choice ->
-                            val rowAgent = agents.find { it.id.equals(choice.value, ignoreCase = true) }
-                            val rowAgentId = rowAgent?.id
-                                ?: choice.value.takeIf { bundledAgentAsset(it, false) != null }
-                                ?: choice.label.takeIf { bundledAgentAsset(it, false) != null }
-                                ?: agentId
-                            val rowSvg = when {
-                                rowAgent != null -> rowAgent.iconSvg
-                                rowAgentId.equals(agentId, ignoreCase = true) -> agent?.iconSvg
-                                else -> null
-                            }
-                            AgentAvatar(
-                                agentId = rowAgentId,
-                                size = 16.dp,
-                                iconSvg = rowSvg,
-                                displayName = rowAgent?.displayName?.ifBlank { choice.label } ?: choice.label,
-                            )
-                        },
-                        onSelect = { value ->
-                            onSelectOption(modelOption.key, value)
-                            onMenuChange(null)
-                        },
-                        onAddCustomModel = if (onAddCustomModel != null) {
-                            {
-                                onMenuChange(null)
-                                customModelDraft = ""
-                                showCustomModelDialog = true
-                            }
-                        } else {
-                            null
-                        },
-                    )
-                }
-            }
-
-            AnimatedVisibility(
-                visible = menu == ComposerMenu.Effort && effortOption != null && effortOption.choices.size > 1,
-                enter = expandVertically(animationSpec = spring(dampingRatio = 0.86f)) + fadeIn(),
-                exit = shrinkVertically(animationSpec = spring(dampingRatio = 0.86f)) + fadeOut(),
-            ) {
-                if (effortOption != null) {
-                    EffortMenu(
-                        option = effortOption,
-                        onSelect = { value ->
-                            onSelectOption(effortOption.key, value)
-                            onMenuChange(null)
-                        },
-                        modifier = Modifier.width(280.dp),
-                    )
-                }
-            }
-
-            // Unified Dock + Expandable Bottom Drawer (1:1 with iOS PromptBar.dockSurface)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(
-                        elevation = if (colors.isDark) 10.dp else 6.dp,
-                        shape = dockShape,
-                        ambientColor = Color.Black.copy(alpha = if (colors.isDark) 0.22f else 0.05f),
-                        spotColor = Color.Black.copy(alpha = if (colors.isDark) 0.28f else 0.08f),
-                    )
-                    .clip(dockShape)
-                    .background(colors.card)
-                    .then(
-                        if (effortAtMax) {
-                            Modifier.background(
-                                Brush.radialGradient(
-                                    colors = listOf(
-                                        SparkColor.copy(alpha = 0.22f),
-                                        SparkColor.copy(alpha = 0.06f),
-                                        Color.Transparent,
-                                    ),
-                                    center = Offset(900f, 0f),
-                                    radius = 520f,
-                                ),
-                            )
-                        } else {
-                            Modifier
-                        },
-                    )
-                    .border(
-                        width = 0.75.dp,
-                        color = if (effortAtMax) SparkColor.copy(alpha = 0.38f) else colors.stroke,
-                        shape = dockShape,
-                    ),
-            ) {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    // Multiline Input
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 14.dp, end = 14.dp, top = 11.dp, bottom = 6.dp),
-                    ) {
-                        if (text.isEmpty()) {
-                            Text(
-                                text = "发消息",
-                                fontSize = 15.sp,
-                                color = colors.textTertiary,
-                            )
-                        }
-                        BasicTextField(
-                            value = text,
-                            onValueChange = { next ->
-                                if (menu != null) onMenuChange(null)
-                                onTextChange(next)
-                            },
-                            enabled = enabled,
-                            maxLines = 5,
-                            textStyle = TextStyle(
-                                fontSize = 15.sp,
-                                lineHeight = 20.sp,
-                                color = colors.textPrimary,
-                            ),
-                            cursorBrush = SolidColor(colors.accent),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 24.dp)
-                                .onFocusChanged { focusState ->
-                                    onFocusChange(focusState.isFocused)
-                                    if (focusState.isFocused && menu != null) {
-                                        onMenuChange(null)
-                                    }
-                                },
-                        )
-                    }
-
-                    // Bottom Tool Row
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 10.dp, end = 10.dp, bottom = 9.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        ToolButton(
-                            open = menu == ComposerMenu.Plus,
-                            hasAlert = isNonDefaultPermission,
-                            onClick = {
-                                focusManager.clearFocus()
-                                plusPanel = PlusPanel.Grid
-                                onMenuChange(if (menu == ComposerMenu.Plus) null else ComposerMenu.Plus)
-                            },
-                        )
-
-                        Row(
-                            modifier = Modifier
-                                .weight(1f)
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            // 1. Optional AI Agent Pill (shown on New Conversation Landing)
-                            if (showAgentSelector && agents.isNotEmpty()) {
-                                PickPill(
-                                    label = agentLabel,
-                                    open = menu == ComposerMenu.Agent,
-                                    enabled = agents.size > 1,
-                                    leading = {
-                                        AgentAvatar(
-                                            agentId = agentId,
-                                            size = 14.dp,
-                                            iconSvg = agent?.iconSvg,
-                                            displayName = agentLabel,
-                                        )
-                                    },
-                                    onClick = {
-                                        focusManager.clearFocus()
-                                        onMenuChange(if (menu == ComposerMenu.Agent) null else ComposerMenu.Agent)
-                                    },
-                                )
-                            }
-
-                            // 2. Model Pill
-                            PickPill(
-                                label = modelName,
-                                open = menu == ComposerMenu.Model,
-                                enabled = (modelOption?.choices?.size ?: 0) >= 1 || onAddCustomModel != null,
-                                leading = {
-                                    if (showAgentSelector) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.AutoAwesome,
-                                            contentDescription = null,
-                                            tint = colors.textSecondary,
-                                            modifier = Modifier.size(12.dp),
-                                        )
-                                    } else {
-                                        AgentAvatar(
-                                            agentId = agentId,
-                                            size = 14.dp,
-                                            iconSvg = agent?.iconSvg,
-                                            displayName = agent?.displayName.orEmpty(),
-                                        )
-                                    }
-                                },
-                                onClick = {
-                                    focusManager.clearFocus()
-                                    onMenuChange(if (menu == ComposerMenu.Model) null else ComposerMenu.Model)
-                                },
-                            )
-
-                            // 3. Effort Pill
-                            if (effortOption != null) {
-                                PickPill(
-                                    label = effortOption.currentLabel,
-                                    open = menu == ComposerMenu.Effort,
-                                    enabled = effortOption.choices.size > 1,
-                                    tint = if (effortAtMax) SparkColor else null,
-                                    leading = {
-                                        Icon(
-                                            imageVector = Icons.Rounded.AutoAwesome,
-                                            contentDescription = null,
-                                            tint = if (effortAtMax) SparkColor else colors.textSecondary,
-                                            modifier = Modifier.size(12.dp),
-                                        )
-                                    },
-                                    onClick = {
-                                        focusManager.clearFocus()
-                                        onMenuChange(if (menu == ComposerMenu.Effort) null else ComposerMenu.Effort)
-                                    },
-                                )
-                            }
-                        }
-
-                        SendButton(
-                            ready = canSend,
-                            busy = isStreaming,
-                            onClick = {
-                                onMenuChange(null)
-                                if (isStreaming) onStop() else if (canSend) onSend()
-                            },
-                        )
-                    }
-
-                    // Integrated Plus Drawer inside the same rounded dock surface
-                    AnimatedVisibility(
-                        visible = menu == ComposerMenu.Plus,
-                        enter = expandVertically(animationSpec = spring(dampingRatio = 0.86f)) + fadeIn(),
-                        exit = shrinkVertically(animationSpec = spring(dampingRatio = 0.86f)) + fadeOut(),
-                    ) {
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            HorizontalDivider(thickness = 0.6.dp, color = colors.stroke)
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                            ) {
-                                when (plusPanel) {
-                                    PlusPanel.Grid -> {
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(vertical = 4.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        ) {
-                                            PlusGridTile(
-                                                title = "文件",
-                                                subtitle = "浏览项目",
-                                                modifier = Modifier.weight(1f),
-                                                icon = {
-                                                    Icon(
-                                                        imageVector = Icons.Rounded.CreateNewFolder,
-                                                        contentDescription = null,
-                                                        tint = colors.textPrimary,
-                                                        modifier = Modifier.size(20.dp),
-                                                    )
-                                                },
-                                                onClick = {
-                                                    onMenuChange(null)
-                                                    onOpenFileBrowser?.invoke()
-                                                },
-                                            )
-                                            PlusGridTile(
-                                                title = "模型",
-                                                subtitle = modelName,
-                                                modifier = Modifier.weight(1f),
-                                                icon = {
-                                                    AgentAvatar(
-                                                        agentId = agentId,
-                                                        size = 22.dp,
-                                                        iconSvg = agent?.iconSvg,
-                                                        displayName = agent?.displayName.orEmpty(),
-                                                    )
-                                                },
-                                                onClick = {
-                                                    if (modelOption != null && modelOption.choices.isNotEmpty()) {
-                                                        plusPanel = PlusPanel.Model
-                                                    }
-                                                },
-                                            )
-                                            PlusGridTile(
-                                                title = "模式",
-                                                subtitle = currentModeName,
-                                                modifier = Modifier.weight(1f),
-                                                icon = { BotModeGlyph(tint = colors.textPrimary) },
-                                                onClick = { plusPanel = PlusPanel.Mode },
-                                            )
-                                            PlusGridTile(
-                                                title = "权限",
-                                                subtitle = currentPermissionLabel,
-                                                badge = isNonDefaultPermission,
-                                                modifier = Modifier.weight(1f),
-                                                icon = {
-                                                    Icon(
-                                                        imageVector = Icons.Rounded.VerifiedUser,
-                                                        contentDescription = null,
-                                                        tint = if (isNonDefaultPermission) WarningOrange else colors.textPrimary,
-                                                        modifier = Modifier.size(20.dp),
-                                                    )
-                                                },
-                                                onClick = { plusPanel = PlusPanel.Permission },
-                                            )
-                                        }
-                                    }
-
-                                    PlusPanel.Agent -> {
-                                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            PlusSubpanelHeader(title = "选择 AI Agent") { plusPanel = PlusPanel.Grid }
-                                            DrawerChoiceList(
-                                                choices = agents.map { a ->
-                                                    SessionConfigChoice(a.id, agentDisplayName(a.id, a.displayName))
-                                                },
-                                                selected = agentId,
-                                                onSelect = { id ->
-                                                    onSelectAgent?.invoke(id)
-                                                    onMenuChange(null)
-                                                },
-                                            )
-                                        }
-                                    }
-
-                                    PlusPanel.Model -> {
-                                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            PlusSubpanelHeader(title = "选择模型") { plusPanel = PlusPanel.Grid }
-                                            if (modelOption != null && modelOption.choices.isNotEmpty()) {
-                                                DrawerChoiceList(
-                                                    choices = modelOption.choices,
-                                                    selected = modelOption.value,
-                                                    leading = { choice ->
-                                                        val rowAgent = agents.find { it.id.equals(choice.value, ignoreCase = true) }
-                                                        val rowAgentId = rowAgent?.id
-                                                            ?: choice.value.takeIf { bundledAgentAsset(it, false) != null }
-                                                            ?: choice.label.takeIf { bundledAgentAsset(it, false) != null }
-                                                            ?: agentId
-                                                        val rowSvg = when {
-                                                            rowAgent != null -> rowAgent.iconSvg
-                                                            rowAgentId.equals(agentId, ignoreCase = true) -> agent?.iconSvg
-                                                            else -> null
-                                                        }
-                                                        AgentAvatar(
-                                                            agentId = rowAgentId,
-                                                            size = 16.dp,
-                                                            iconSvg = rowSvg,
-                                                            displayName = rowAgent?.displayName?.ifBlank { choice.label } ?: choice.label,
-                                                        )
-                                                    },
-                                                    onSelect = { v ->
-                                                        onSelectOption(modelOption.key, v)
-                                                        onMenuChange(null)
-                                                    },
-                                                    onAddCustomModel = if (onAddCustomModel != null) {
-                                                        {
-                                                            onMenuChange(null)
-                                                            customModelDraft = ""
-                                                            showCustomModelDialog = true
-                                                        }
-                                                    } else {
-                                                        null
-                                                    },
-                                                )
-                                            } else {
-                                                PlusEmptyHint("当前 Agent 不支持切换模型")
-                                            }
-                                        }
-                                    }
-
-                                    PlusPanel.Mode -> {
-                                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            PlusSubpanelHeader(title = "模式与推理") { plusPanel = PlusPanel.Grid }
-                                            if (modes.isNotEmpty()) {
-                                                DrawerChoiceList(
-                                                    choices = modes.map { SessionConfigChoice(value = it.id, label = it.name) },
-                                                    selected = currentModeId.ifBlank { modes.first().id },
-                                                    onSelect = { id ->
-                                                        onSelectMode(id)
-                                                        onMenuChange(null)
-                                                    },
-                                                )
-                                            }
-                                            if (effortOption != null && effortOption.choices.size > 1) {
-                                                EffortMenu(
-                                                    option = effortOption,
-                                                    onSelect = { v -> onSelectOption(effortOption.key, v) },
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                )
-                                            }
-                                            if (modes.isEmpty() && effortOption == null) {
-                                                PlusEmptyHint("当前会话无可用模式选项")
-                                            }
-                                        }
-                                    }
-
-                                    PlusPanel.Permission -> {
-                                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            PlusSubpanelHeader(title = "权限设置") { plusPanel = PlusPanel.Grid }
-                                            when {
-                                                permissionOption != null && permissionOption.choices.isNotEmpty() -> {
-                                                    DrawerChoiceList(
-                                                        choices = permissionOption.choices,
-                                                        selected = permissionOption.value,
-                                                        onSelect = { v ->
-                                                            onSelectOption(permissionOption.key, v)
-                                                            onMenuChange(null)
-                                                        },
-                                                    )
-                                                }
-                                                modes.isNotEmpty() -> {
-                                                    DrawerChoiceList(
-                                                        choices = modes.map { SessionConfigChoice(value = it.id, label = it.name) },
-                                                        selected = currentModeId.ifBlank { modes.first().id },
-                                                        onSelect = { id ->
-                                                            onSelectMode(id)
-                                                            onMenuChange(null)
-                                                        },
-                                                    )
-                                                }
-                                                else -> PlusEmptyHint("当前会话使用默认工具确认权限")
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if (showCustomModelDialog) {
-            AlertDialog(
-                onDismissRequest = { showCustomModelDialog = false },
-                title = { Text("自定义 / 中转模型") },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            "输入桌面端中转服务或网关支持的模型 ID：",
-                            fontSize = 13.sp,
-                            color = colors.textSecondary,
-                        )
-                        OutlinedTextField(
-                            value = customModelDraft,
-                            onValueChange = { customModelDraft = it },
-                            placeholder = { Text("例如 claude-opus-4-8 / deepseek-r1") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            val trimmed = customModelDraft.trim()
-                            showCustomModelDialog = false
-                            if (trimmed.isNotEmpty()) {
-                                onAddCustomModel?.invoke(trimmed)
-                            }
-                        },
-                    ) {
-                        Text("使用该模型")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showCustomModelDialog = false }) {
-                        Text("取消")
-                    }
-                },
-            )
-        }
-    }
-}
-
-@Composable
-private fun PlusGridTile(
-    title: String,
-    subtitle: String,
-    modifier: Modifier = Modifier,
-    badge: Boolean = false,
-    icon: @Composable () -> Unit,
-    onClick: () -> Unit,
-) {
-    val colors = VibexTheme.colors
-    val tileShape = RoundedCornerShape(14.dp)
-    val boxShape = RoundedCornerShape(14.dp)
 
     Column(
         modifier = modifier
-            .clip(tileShape)
-            .background(colors.bg.copy(alpha = 0.65f))
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp, horizontal = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(5.dp),
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp)
+            .padding(bottom = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .size(46.dp)
-                .clip(boxShape)
-                .background(colors.bg),
-            contentAlignment = Alignment.Center,
+        AnimatedVisibility(
+            visible = dictationError != null,
+            enter = fadeIn(),
+            exit = fadeOut(),
         ) {
-            icon()
-            if (badge) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .offset(x = (-4).dp, y = 4.dp)
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(WarningOrange),
+            dictationError?.let { msg ->
+                Text(
+                    text = msg,
+                    fontSize = 12.sp,
+                    color = colors.textSecondary,
+                    modifier = Modifier.padding(horizontal = 8.dp),
                 )
             }
         }
-        Text(
-            text = title,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
-            color = colors.textPrimary,
-            maxLines = 1,
-        )
-        Text(
-            text = subtitle,
-            fontSize = 10.sp,
-            color = colors.textSecondary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
 
-/**
- * 1:1 port of iOS `BotModeGlyph` (`PromptBar.swift`).
- */
-@Composable
-fun BotModeGlyph(
-    modifier: Modifier = Modifier,
-    tint: Color = VibexTheme.colors.textPrimary,
-) {
-    Canvas(modifier = modifier.size(20.dp)) {
-        val w = size.width
-        val h = size.height
-        val stroke = 1.75.dp.toPx()
-
-        // Antenna stem & tip
-        drawLine(
-            color = tint,
-            start = Offset(w * 0.5f, h * 0.14f),
-            end = Offset(w * 0.5f, h * 0.27f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-        )
-        drawCircle(
-            color = tint,
-            radius = w * 0.055f,
-            center = Offset(w * 0.5f, h * 0.11f),
-        )
-
-        // Side ears
-        drawLine(
-            color = tint,
-            start = Offset(w * 0.10f, h * 0.48f),
-            end = Offset(w * 0.18f, h * 0.48f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-        )
-        drawLine(
-            color = tint,
-            start = Offset(w * 0.82f, h * 0.48f),
-            end = Offset(w * 0.90f, h * 0.48f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-        )
-
-        // Head rounded rect
-        drawRoundRect(
-            color = tint,
-            topLeft = Offset(w * 0.18f, h * 0.27f),
-            size = Size(w * 0.64f, h * 0.56f),
-            cornerRadius = CornerRadius(w * 0.18f, w * 0.18f),
-            style = Stroke(width = stroke),
-        )
-
-        // Eyes
-        drawCircle(
-            color = tint,
-            radius = w * 0.06f,
-            center = Offset(w * 0.37f, h * 0.51f),
-        )
-        drawCircle(
-            color = tint,
-            radius = w * 0.06f,
-            center = Offset(w * 0.63f, h * 0.51f),
-        )
-
-        // Smile line
-        drawLine(
-            color = tint,
-            start = Offset(w * 0.39f, h * 0.67f),
-            end = Offset(w * 0.61f, h * 0.67f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-        )
-    }
-}
-
-@Composable
-private fun PlusSubpanelHeader(
-    title: String,
-    onBack: () -> Unit,
-) {
-    val colors = VibexTheme.colors
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 4.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Row(
+        Column(
             modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .clickable(onClick = onBack)
-                .padding(horizontal = 4.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .fillMaxWidth()
+                .shadow(
+                    elevation = if (colors.isDark) 10.dp else 6.dp,
+                    shape = capsuleShape,
+                    ambientColor = Color.Black.copy(alpha = if (colors.isDark) 0.24f else 0.06f),
+                    spotColor = Color.Black.copy(alpha = if (colors.isDark) 0.30f else 0.09f),
+                )
+                .clip(capsuleShape)
+                .background(colors.card)
+                .then(
+                    if (effortAtMax) {
+                        Modifier.background(
+                            Brush.radialGradient(
+                                colors = listOf(
+                                    SparkColor.copy(alpha = 0.22f),
+                                    Color.Transparent,
+                                ),
+                                center = Offset(80f, 180f),
+                                radius = 420f,
+                            ),
+                        )
+                    } else {
+                        Modifier
+                    },
+                )
+                .border(
+                    width = 0.75.dp,
+                    color = if (effortAtMax) SparkColor.copy(alpha = 0.36f) else colors.stroke,
+                    shape = capsuleShape,
+                )
+                .padding(start = 10.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Icon(
-                imageVector = Icons.Rounded.ChevronLeft,
-                contentDescription = null,
-                tint = colors.textSecondary,
-                modifier = Modifier.size(16.dp),
-            )
-            Text(
-                text = "返回",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = colors.textSecondary,
-            )
+            if (attachedMedia.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    attachedMedia.forEach { item ->
+                        Box(modifier = Modifier.size(54.dp)) {
+                            AsyncImage(
+                                model = item.uriString,
+                                contentDescription = item.label,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(54.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .border(0.6.dp, colors.stroke, RoundedCornerShape(12.dp)),
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .offset(x = 3.dp, y = (-3).dp)
+                                    .size(18.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.Black.copy(alpha = 0.68f))
+                                    .clickable {
+                                        attachedMedia = attachedMedia.filterNot { it.id == item.id }
+                                        onDraftEmptyChanged?.invoke(localText.isBlank() && attachedMedia.isEmpty())
+                                    },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Close,
+                                    contentDescription = "移除图片",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(12.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                // 1. `+` Attachment & Quick Options Menu
+                Box {
+                    Box(
+                        modifier = Modifier
+                            .size(width = 34.dp, height = 36.dp)
+                            .clip(CircleShape)
+                            .clickable {
+                                focusManager.clearFocus()
+                                plusMenuExpanded = true
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Add,
+                            contentDescription = "添加附件或选项",
+                            tint = colors.textPrimary.copy(alpha = 0.82f),
+                            modifier = Modifier.size(20.dp),
+                        )
+                        if (hasAlert) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .offset(x = (-3).dp, y = 4.dp)
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(AlertOrange),
+                            )
+                        }
+                    }
+
+                    VibexDropdownMenu(
+                        expanded = plusMenuExpanded,
+                        onDismissRequest = { plusMenuExpanded = false },
+                    ) {
+                        VibexDropdownMenuItem(
+                            text = "照片图库",
+                            leadingIcon = Icons.Rounded.PhotoLibrary,
+                            onClick = {
+                                plusMenuExpanded = false
+                                photoPicker.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                                )
+                            },
+                        )
+                        if (onOpenFileBrowser != null) {
+                            VibexDropdownMenuItem(
+                                text = "浏览项目文件",
+                                leadingIcon = Icons.Rounded.Folder,
+                                onClick = {
+                                    plusMenuExpanded = false
+                                    onOpenFileBrowser()
+                                },
+                            )
+                        }
+                        if (onCompact != null) {
+                            VibexDropdownMenuItem(
+                                text = "压缩上下文 (/compact)",
+                                leadingIcon = Icons.Rounded.Compress,
+                                onClick = {
+                                    plusMenuExpanded = false
+                                    onCompact()
+                                },
+                            )
+                        }
+                        VibexDropdownDivider()
+                        VibexDropdownMenuItem(
+                            text = "会话与模型设置",
+                            leadingIcon = Icons.Rounded.Tune,
+                            onClick = {
+                                plusMenuExpanded = false
+                                onRefreshCatalog?.invoke()
+                                showThreadSettingsSheet = true
+                            },
+                        )
+                    }
+                }
+
+                // 2. Multiline Text Input
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 36.dp)
+                        .padding(vertical = 7.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    if (localText.isEmpty()) {
+                        Text(
+                            text = placeholder,
+                            fontSize = 15.5.sp,
+                            color = colors.textTertiary,
+                            maxLines = 1,
+                        )
+                    }
+                    BasicTextField(
+                        value = localText,
+                        onValueChange = { next ->
+                            localText = next
+                            onDraftEmptyChanged?.invoke(next.isBlank() && attachedMedia.isEmpty())
+                        },
+                        enabled = enabled,
+                        maxLines = 5,
+                        textStyle = TextStyle(
+                            fontSize = 15.5.sp,
+                            lineHeight = 21.sp,
+                            color = colors.textPrimary,
+                        ),
+                        cursorBrush = SolidColor(colors.accent),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+
+                // 3. Thread Settings Trigger (`AgentIcon ⌄`)
+                Row(
+                    modifier = Modifier
+                        .height(36.dp)
+                        .clip(CircleShape)
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            focusManager.clearFocus()
+                            onRefreshCatalog?.invoke()
+                            showThreadSettingsSheet = true
+                        }
+                        .padding(horizontal = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    AgentAvatar(
+                        agentId = agentId,
+                        size = 17.dp,
+                        iconSvg = agent?.iconSvg,
+                        displayName = agent?.displayName.orEmpty(),
+                    )
+                    Icon(
+                        imageVector = Icons.Rounded.KeyboardArrowDown,
+                        contentDescription = "会话设置",
+                        tint = colors.textSecondary,
+                        modifier = Modifier.size(13.dp),
+                    )
+                }
+
+                // 4. Live Speech Dictation Button (`Mic` / Pulsing Waveform)
+                val pulseTransition = rememberInfiniteTransition(label = "micPulse")
+                val micScale by pulseTransition.animateFloat(
+                    initialValue = 1f,
+                    targetValue = if (isRecording) 1.14f else 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(durationMillis = 560),
+                        repeatMode = RepeatMode.Reverse,
+                    ),
+                    label = "micScale",
+                )
+                Box(
+                    modifier = Modifier
+                        .size(width = 32.dp, height = 36.dp)
+                        .clip(CircleShape)
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            if (isRecording) {
+                                stopDictation()
+                            } else {
+                                val granted = ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.RECORD_AUDIO,
+                                ) == PackageManager.PERMISSION_GRANTED
+                                if (granted) startDictationNow()
+                                else micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = if (isRecording) Icons.Rounded.GraphicEq else Icons.Rounded.Mic,
+                        contentDescription = if (isRecording) "停止语音输入" else "语音输入",
+                        tint = if (isRecording) RecordingRed else colors.textPrimary.copy(alpha = 0.75f),
+                        modifier = Modifier
+                            .size(if (isRecording) 20.dp else 18.dp)
+                            .scale(if (isRecording) micScale else 1f),
+                    )
+                }
+
+                // 5. Circular Monochrome Send / Stop Button (`36dp`)
+                CircularSendStopButton(
+                    armed = armed,
+                    running = isStreaming,
+                    onClick = {
+                        if (isStreaming) onStop() else performSend()
+                    },
+                )
+            }
         }
-        Spacer(modifier = Modifier.weight(1f))
-        Text(
-            text = title,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = colors.textPrimary,
-        )
-        Spacer(modifier = Modifier.weight(1f))
-        Spacer(modifier = Modifier.width(44.dp))
     }
-}
 
-@Composable
-private fun PlusEmptyHint(text: String) {
-    val colors = VibexTheme.colors
-    val shape = RoundedCornerShape(14.dp)
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(colors.card)
-            .padding(vertical = 18.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = text,
-            fontSize = 13.sp,
-            color = colors.textSecondary,
+    if (showThreadSettingsSheet) {
+        ThreadSettingsSheet(
+            agentId = agentId,
+            agent = agent,
+            agents = agents,
+            allowCrossAgentSwitch = allowCrossAgentSwitch,
+            modes = modes,
+            currentModeId = currentModeId,
+            configOptions = configOptions,
+            modelPrefs = modelPrefs,
+            onSelectAgentAndModel = onSelectAgentAndModel,
+            onSelectMode = onSelectMode,
+            onSelectOption = onSelectOption,
+            onRefreshCatalog = onRefreshCatalog,
+            onDismiss = { showThreadSettingsSheet = false },
         )
     }
 }
 
 @Composable
-private fun ToolButton(
-    open: Boolean,
-    hasAlert: Boolean = false,
+private fun CircularSendStopButton(
+    armed: Boolean,
+    running: Boolean,
     onClick: () -> Unit,
-) {
-    val colors = VibexTheme.colors
-    val rotation by animateFloatAsState(
-        targetValue = if (open) 45f else 0f,
-        animationSpec = spring(dampingRatio = 0.8f),
-        label = "plusRotate",
-    )
-
-    Box(
-        modifier = Modifier
-            .size(30.dp)
-            .clip(CircleShape)
-            .background(colors.textPrimary.copy(alpha = if (open) 0.14f else 0.07f))
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            imageVector = Icons.Rounded.Add,
-            contentDescription = "更多选项",
-            tint = colors.textPrimary,
-            modifier = Modifier
-                .size(16.dp)
-                .rotate(rotation),
-        )
-        if (hasAlert && !open) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .size(7.dp)
-                    .clip(CircleShape)
-                    .background(WarningOrange),
-            )
-        }
-    }
-}
-
-@Composable
-private fun PickPill(
-    label: String,
-    open: Boolean,
-    enabled: Boolean,
-    tint: Color? = null,
-    leading: @Composable () -> Unit,
-    onClick: () -> Unit,
-) {
-    val colors = VibexTheme.colors
-    val rotation by animateFloatAsState(
-        targetValue = if (open) 180f else 0f,
-        animationSpec = spring(dampingRatio = 0.85f),
-        label = "pillChevron",
-    )
-
-    Row(
-        modifier = Modifier
-            .height(30.dp)
-            .clip(CircleShape)
-            .background(
-                when {
-                    tint != null -> tint.copy(alpha = if (open) 0.20f else 0.12f)
-                    else -> colors.textPrimary.copy(alpha = if (open) 0.14f else 0.07f)
-                },
-            )
-            .then(
-                if (tint != null) Modifier.border(0.6.dp, tint.copy(alpha = 0.35f), CircleShape)
-                else Modifier,
-            )
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        leading()
-        Text(
-            text = label,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
-            color = tint ?: colors.textPrimary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.widthIn(max = 110.dp),
-        )
-        if (enabled) {
-            Icon(
-                imageVector = Icons.Rounded.KeyboardArrowDown,
-                contentDescription = null,
-                tint = (tint ?: colors.textSecondary).copy(alpha = 0.85f),
-                modifier = Modifier
-                    .size(13.dp)
-                    .rotate(rotation),
-            )
-        }
-    }
-}
-
-@Composable
-private fun SendButton(
-    ready: Boolean,
-    busy: Boolean,
-    onClick: () -> Unit,
-) {
-    val colors = VibexTheme.colors
-    val active = ready || busy
-    Box(
-        modifier = Modifier
-            .size(30.dp)
-            .clip(CircleShape)
-            .background(if (active) colors.textPrimary else colors.textPrimary.copy(alpha = if (colors.isDark) 0.16f else 0.11f))
-            .clickable(enabled = active, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        SendGlyph(stop = busy, ready = ready)
-    }
-}
-
-@Composable
-private fun SendGlyph(
-    stop: Boolean,
-    ready: Boolean,
 ) {
     val colors = VibexTheme.colors
     val morph by animateFloatAsState(
-        targetValue = if (stop) 1f else 0f,
-        animationSpec = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMediumLow),
+        targetValue = if (running) 1f else 0f,
+        animationSpec = tween(durationMillis = 220),
         label = "sendMorph",
     )
-    val fg = if (ready || stop) colors.bg else colors.textTertiary
-
-    Canvas(modifier = Modifier.size(13.dp)) {
-        val w = size.width
-        val h = size.height
-        val cx = w / 2f
-        val cy = h / 2f
-        val m = morph.coerceIn(0f, 1f)
-
-        if (m > 0.02f) {
-            val side = minOf(w, h) * (0.45f + 0.37f * m)
-            val corner = side * 0.24f
-            drawRoundRect(
-                color = fg.copy(alpha = m),
-                topLeft = Offset(cx - side / 2f, cy - side / 2f),
-                size = Size(side, side),
-                cornerRadius = CornerRadius(corner, corner),
-            )
-        }
-        if (m < 0.98f) {
-            val k = 1f - m
-            val path = Path().apply {
-                moveTo(cx, cy + h * 0.40f * k)
-                lineTo(cx, cy - h * 0.38f * k)
-                moveTo(cx - w * 0.34f * k, cy - h * 0.04f * k)
-                lineTo(cx, cy - h * 0.38f * k)
-                lineTo(cx + w * 0.34f * k, cy - h * 0.04f * k)
-            }
-            drawPath(
-                path = path,
-                color = fg.copy(alpha = k),
-                style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
-            )
-        }
-    }
-}
-
-@Composable
-private fun DrawerChoiceList(
-    choices: List<SessionConfigChoice>,
-    selected: String,
-    leading: (@Composable (SessionConfigChoice) -> Unit)? = null,
-    onSelect: (String) -> Unit,
-    onAddCustomModel: (() -> Unit)? = null,
-) {
-    val colors = VibexTheme.colors
-    val shape = RoundedCornerShape(14.dp)
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(max = 248.dp)
-            .clip(shape)
-            .background(colors.bg.copy(alpha = 0.65f))
-            .verticalScroll(rememberScrollState())
-            .padding(4.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        choices.forEach { choice ->
-            val isSelected = choice.value == selected
-            val rowShape = RoundedCornerShape(10.dp)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(rowShape)
-                    .background(if (isSelected) colors.accent.copy(alpha = 0.12f) else Color.Transparent)
-                    .clickable { onSelect(choice.value) }
-                    .padding(horizontal = 12.dp, vertical = 9.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                leading?.invoke(choice)
-                Text(
-                    text = choice.label,
-                    fontSize = 14.sp,
-                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (isSelected) colors.accent else colors.textPrimary,
-                    modifier = Modifier.weight(1f),
-                )
-                if (isSelected) {
-                    Icon(
-                        imageVector = Icons.Rounded.Check,
-                        contentDescription = null,
-                        tint = colors.accent,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
-            }
-        }
-        if (onAddCustomModel != null) {
-            HorizontalDivider(thickness = 0.5.dp, color = colors.stroke, modifier = Modifier.padding(vertical = 2.dp))
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .clickable { onAddCustomModel() }
-                    .padding(horizontal = 12.dp, vertical = 9.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Add,
-                    contentDescription = null,
-                    tint = colors.accent,
-                    modifier = Modifier.size(16.dp),
-                )
-                Text(
-                    text = "自定义 / 中转模型…",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = colors.accent,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun MenuList(
-    title: String,
-    choices: List<SessionConfigChoice>,
-    selected: String,
-    leading: (@Composable (SessionConfigChoice) -> Unit)? = null,
-    onSelect: (String) -> Unit,
-    onAddCustomModel: (() -> Unit)? = null,
-) {
-    val colors = VibexTheme.colors
-    val shape = RoundedCornerShape(18.dp)
-
-    Column(
-        modifier = Modifier
-            .width(260.dp)
-            .shadow(20.dp, shape, ambientColor = Color.Black.copy(alpha = 0.14f), spotColor = Color.Black.copy(alpha = 0.14f))
-            .clip(shape)
-            .background(colors.card)
-            .border(0.6.dp, colors.textPrimary.copy(alpha = 0.08f), shape),
-    ) {
-        Text(
-            text = title,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
-            color = colors.textSecondary,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-        )
-        HorizontalDivider(thickness = 0.5.dp, color = colors.stroke)
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 280.dp)
-                .verticalScroll(rememberScrollState())
-                .padding(6.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            choices.forEach { choice ->
-                val isSelected = choice.value == selected
-                val rowShape = RoundedCornerShape(11.dp)
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(rowShape)
-                        .background(if (isSelected) colors.textPrimary.copy(alpha = 0.07f) else Color.Transparent)
-                        .clickable { onSelect(choice.value) }
-                        .padding(horizontal = 10.dp, vertical = 9.dp),
-                    horizontalArrangement = Arrangement.spacedBy(9.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    leading?.invoke(choice)
-                    Text(
-                        text = choice.label,
-                        fontSize = 14.sp,
-                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                        color = colors.textPrimary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (isSelected) {
-                        Icon(
-                            imageVector = Icons.Rounded.Check,
-                            contentDescription = null,
-                            tint = colors.textPrimary,
-                            modifier = Modifier.size(15.dp),
-                        )
-                    }
-                }
-            }
-            if (onAddCustomModel != null) {
-                HorizontalDivider(thickness = 0.5.dp, color = colors.stroke, modifier = Modifier.padding(vertical = 2.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(11.dp))
-                        .clickable { onAddCustomModel() }
-                        .padding(horizontal = 10.dp, vertical = 9.dp),
-                    horizontalArrangement = Arrangement.spacedBy(9.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Add,
-                        contentDescription = null,
-                        tint = colors.accent,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Text(
-                        text = "自定义 / 中转模型…",
-                        fontSize = 13.5.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = colors.accent,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun EffortMenu(
-    option: SessionConfigOption,
-    onSelect: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val colors = VibexTheme.colors
-    val choices = option.choices
-    val selectedIndex = remember(choices, option.value) {
-        choices.indexOfFirst { it.value == option.value }.coerceAtLeast(0)
-    }
-    var liveIndex by remember(selectedIndex) { mutableIntStateOf(selectedIndex) }
-    val safeLiveIndex = liveIndex.coerceIn(0, (choices.size - 1).coerceAtLeast(0))
-    val current = choices.getOrNull(safeLiveIndex)
-    val atMax = choices.size > 1 && safeLiveIndex == choices.lastIndex
-
-    val shape = RoundedCornerShape(22.dp)
-
-    Column(
-        modifier = modifier
-            .shadow(20.dp, shape, ambientColor = Color.Black.copy(alpha = 0.14f), spotColor = Color.Black.copy(alpha = 0.14f))
-            .clip(shape)
-            .background(colors.card)
-            .border(0.6.dp, colors.textPrimary.copy(alpha = 0.08f), shape)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.AutoAwesome,
-                contentDescription = null,
-                tint = if (atMax) SparkColor else colors.textSecondary,
-                modifier = Modifier.size(14.dp),
-            )
-            Text(
-                text = "推理强度",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
-                color = colors.textSecondary,
-            )
-            Spacer(modifier = Modifier.weight(1f))
-            Text(
-                text = current?.label ?: option.currentLabel,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = if (atMax) SparkColor else colors.textPrimary,
-            )
-        }
-
-        EffortSlider(
-            steps = choices.size,
-            index = safeLiveIndex,
-            atMax = atMax,
-            onIndexChange = { next ->
-                liveIndex = next
-            },
-            onCommit = { next ->
-                liveIndex = next
-                choices.getOrNull(next)?.let { choice ->
-                    onSelect(choice.value)
-                }
-            },
-        )
-    }
-}
-
-@Composable
-private fun EffortSlider(
-    steps: Int,
-    index: Int,
-    atMax: Boolean,
-    onIndexChange: (Int) -> Unit,
-    onCommit: (Int) -> Unit,
-) {
-    val colors = VibexTheme.colors
-    var widthPx by remember { mutableIntStateOf(1) }
-    val trackHeight = 38.dp
-    val padPx = 19f
-    val count = maxOf(steps, 2)
-    val span = (widthPx.toFloat() - padPx * 2f).coerceAtLeast(1f)
-    val progress = index.toFloat() / (count - 1).toFloat()
-    val fillWidthPx = padPx + span * progress
-
-    fun nearestStep(x: Float): Int {
-        val ratio = ((x - padPx) / span).coerceIn(0f, 1f)
-        return (ratio * (count - 1)).roundToInt().coerceIn(0, count - 1)
-    }
+    val bg = if (armed) colors.textPrimary else colors.textPrimary.copy(alpha = 0.08f)
+    val fg = if (armed) colors.bg else colors.textPrimary.copy(alpha = 0.36f)
 
     Box(
         modifier = Modifier
-            .fillMaxWidth()
-            .height(trackHeight)
-            .onSizeChanged { widthPx = it.width.coerceAtLeast(1) }
+            .size(36.dp)
             .clip(CircleShape)
-            .background(colors.textPrimary.copy(alpha = 0.07f))
-            .pointerInput(count) {
-                detectTapGestures { offset ->
-                    val next = nearestStep(offset.x)
-                    onCommit(next)
-                }
-            }
-            .pointerInput(count) {
-                var lastIdx = index
-                detectHorizontalDragGestures(
-                    onDragStart = { offset ->
-                        lastIdx = nearestStep(offset.x)
-                        onIndexChange(lastIdx)
-                    },
-                    onHorizontalDrag = { change, _ ->
-                        change.consume()
-                        lastIdx = nearestStep(change.position.x)
-                        onIndexChange(lastIdx)
-                    },
-                    onDragEnd = { onCommit(lastIdx) },
-                )
-            },
+            .background(bg)
+            .clickable(enabled = armed, onClick = onClick),
+        contentAlignment = Alignment.Center,
     ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val h = size.height
-            val fillColor = if (atMax) SparkColor.copy(alpha = 0.24f) else colors.textPrimary.copy(alpha = 0.14f)
-            drawRoundRect(
-                color = fillColor,
-                topLeft = Offset.Zero,
-                size = Size((fillWidthPx + padPx).coerceAtMost(size.width), h),
-                cornerRadius = CornerRadius(h / 2f, h / 2f),
+        Canvas(modifier = Modifier.size(15.dp)) {
+            val scale = size.width / 24f
+            val arrow = arrayOf(
+                12f to 4.5f,
+                18.5f to 11f,
+                14.25f to 11f,
+                14.25f to 19.5f,
+                9.75f to 19.5f,
+                9.75f to 11f,
+                5.5f to 11f,
             )
-
-            for (step in 0 until count) {
-                val x = padPx + span * (step.toFloat() / (count - 1).toFloat())
-                val dotColor = if (step <= index) {
-                    if (atMax) SparkColor else colors.textPrimary.copy(alpha = 0.55f)
-                } else {
-                    colors.textPrimary.copy(alpha = 0.22f)
+            val square = arrayOf(
+                12f to 6f,
+                18f to 6f,
+                18f to 12f,
+                18f to 18f,
+                6f to 18f,
+                6f to 12f,
+                6f to 6f,
+            )
+            val path = Path().apply {
+                for (i in arrow.indices) {
+                    val (ax, ay) = arrow[i]
+                    val (bx, by) = square[i]
+                    val px = (ax + (bx - ax) * morph) * scale
+                    val py = (ay + (by - ay) * morph) * scale
+                    if (i == 0) moveTo(px, py) else lineTo(px, py)
                 }
-                drawCircle(
-                    color = dotColor,
-                    radius = 2.5.dp.toPx(),
-                    center = Offset(x, h / 2f),
-                )
+                close()
             }
-
-            // Thumb
-            val thumbRadius = 13.dp.toPx()
-            drawCircle(
-                color = if (atMax) SparkColor else colors.textPrimary,
-                radius = thumbRadius,
-                center = Offset(fillWidthPx, h / 2f),
-            )
-            drawCircle(
-                color = Color.White,
-                radius = 4.dp.toPx(),
-                center = Offset(fillWidthPx, h / 2f),
+            drawPath(path = path, color = fg)
+            drawPath(
+                path = path,
+                color = fg,
+                style = Stroke(width = 1.3f * scale, join = StrokeJoin.Round),
             )
         }
     }

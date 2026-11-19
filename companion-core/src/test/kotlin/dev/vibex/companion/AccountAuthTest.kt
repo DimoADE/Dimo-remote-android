@@ -54,11 +54,11 @@ class AccountAuthTest {
     @Test
     fun oauthStartReturnsToTheAuthorizePage() {
         assertEquals(
-            "https://vibex.xforever.xin/api/auth/oauth/github/start?next=%2Fdesktop%2Fauthorize%3Frequest%3Dreq-1",
+            "https://dimo-ai.com/api/auth/oauth/github/start?next=%2Fdesktop%2Fauthorize%3Frequest%3Dreq-1",
             AccountAuthRequests.oauthStartUrl(
-                "https://vibex.xforever.xin",
+                "https://dimo-ai.com",
                 "github",
-                "https://vibex.xforever.xin/desktop/authorize?request=req-1",
+                "https://dimo-ai.com/desktop/authorize?request=req-1",
             ),
         )
     }

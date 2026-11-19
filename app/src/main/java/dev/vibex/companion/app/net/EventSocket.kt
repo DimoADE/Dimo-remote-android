@@ -1,6 +1,7 @@
 package dev.vibex.companion.app.net
 
 import android.util.Base64
+import android.util.Log
 import dev.vibex.companion.E2eeSessionManager
 import dev.vibex.companion.asObject
 import dev.vibex.companion.asText
@@ -18,11 +19,13 @@ import java.util.concurrent.TimeUnit
 class EventSocket(
     private val http: OkHttpClient = OkHttpClient.Builder()
         .socketFactory(TcpNoDelaySocketFactory)
+        .connectTimeout(10, TimeUnit.SECONDS)
         .pingInterval(20, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build(),
 ) {
     private var socket: WebSocket? = null
+    @Volatile
     private var generation = 0
     @Volatile
     private var activeE2eeSession: E2eeSessionManager.SessionState? = null
@@ -38,6 +41,52 @@ class EventSocket(
         onSnapshot: (String, JsonValue) -> Unit,
         onClosed: (String?) -> Unit,
     ) {
+        connectInternal(
+            origin = origin,
+            token = token,
+            allowE2eeRetry = true,
+            onOpen = onOpen,
+            onPongRttMs = onPongRttMs,
+            onEvent = onEvent,
+            onSnapshot = onSnapshot,
+            onClosed = onClosed,
+        )
+    }
+
+    private fun bootstrapE2eeSession(origin: String) {
+        val originKey = E2eeSessionManager.originKey(origin)
+        runCatching {
+            val req = Request.Builder()
+                .url("$originKey/api/v1/e2ee/handshake")
+                .header(E2eeSessionManager.HEADER_CLIENT_PUB, E2eeSessionManager.clientPublicKeyBase64)
+                .get()
+                .build()
+            http.newBuilder()
+                .connectTimeout(5, TimeUnit.SECONDS)
+                .readTimeout(5, TimeUnit.SECONDS)
+                .build()
+                .newCall(req)
+                .execute()
+                .use { resp ->
+                    E2eeSessionManager.ingestHandshake(
+                        originKey,
+                        resp.header(E2eeSessionManager.HEADER_SESSION),
+                        resp.header(E2eeSessionManager.HEADER_SERVER_PUB),
+                    )
+                }
+        }
+    }
+
+    private fun connectInternal(
+        origin: String,
+        token: String,
+        allowE2eeRetry: Boolean,
+        onOpen: () -> Unit,
+        onPongRttMs: (Long) -> Unit,
+        onEvent: (String, RemoteEvent) -> Unit,
+        onSnapshot: (String, JsonValue) -> Unit,
+        onClosed: (String?) -> Unit,
+    ) {
         val session = ++generation
         socket?.cancel()
         socket = null
@@ -46,9 +95,9 @@ class EventSocket(
         val e2ee = E2eeSessionManager.session(origin)
         activeE2eeSession = e2ee
         val protocols = if (e2ee != null) {
-            "vibex.v1, vibex.token.$encoded, vibex.e2ee.${e2ee.sessionId}"
+            "dimo.v1, dimo.token.$encoded, dimo.e2ee.${e2ee.sessionId}"
         } else {
-            "vibex.v1, vibex.token.$encoded"
+            "dimo.v1, dimo.token.$encoded"
         }
         val reqBuilder = Request.Builder()
             .url(ws)
@@ -70,6 +119,7 @@ class EventSocket(
         socket = http.newWebSocket(request, object : WebSocketListener() {
             private fun live(): Boolean = session == generation
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                Log.i("VxSocket", "onOpen origin=$origin http=${response.code}")
                 if (live()) {
                     E2eeSessionManager.ingestHandshake(
                         origin,
@@ -129,10 +179,34 @@ class EventSocket(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                if (live()) onClosed(t.message)
+                val code = response?.code
+                Log.w("VxSocket", "onFailure live=${live()} origin=$origin http=$code err=${t::class.simpleName}: ${t.message}")
+                if (!live()) return
+                if (allowE2eeRetry && e2ee != null && (code == 401 || code == 412)) {
+                    Log.i("VxSocket", "clearing stale E2EE session and retrying ws origin=$origin http=$code")
+                    E2eeSessionManager.clearSession(origin)
+                    bootstrapE2eeSession(origin)
+                    connectInternal(
+                        origin = origin,
+                        token = token,
+                        allowE2eeRetry = false,
+                        onOpen = onOpen,
+                        onPongRttMs = onPongRttMs,
+                        onEvent = onEvent,
+                        onSnapshot = onSnapshot,
+                        onClosed = onClosed,
+                    )
+                    return
+                }
+                if (code == 401) {
+                    onClosed("auth")
+                } else {
+                    onClosed(t.message)
+                }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                Log.w("VxSocket", "onClosed live=${live()} origin=$origin code=$code reason=$reason")
                 if (live()) onClosed(reason)
             }
         })

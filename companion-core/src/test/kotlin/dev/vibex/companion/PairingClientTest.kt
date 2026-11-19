@@ -82,6 +82,27 @@ class PairingClientTest {
     }
 
     @Test
+    fun requestConnectReturnsImmediateCredentialWhenSameAccountAutoApproved() {
+        val transport = ScriptedTransport(
+            listOf(
+                HttpExchange(
+                    201,
+                    """{"request_id":"req-auto","host_id":"host-1","host_name":"Mac Studio","sas_code":"7392","status":"approved","expires_at":"2026-11-14T12:05:00Z","credential":{"device_id":"22222222-2222-2222-2222-222222222222","access_token":"instant-device-token","scopes":["conversation.read","conversation.write"]}}""",
+                ),
+            ),
+        )
+        val result = PairingClient(transport).requestConnect(
+            HostOrigin.parse("http://192.168.1.5:17891"),
+            deviceName = "Pixel 9",
+            accountToken = "same-account-jwt",
+        )
+        assertEquals("approved", result.status)
+        assertEquals("7392", result.sasCode)
+        assertEquals("Mac Studio", result.hostName)
+        assertEquals("instant-device-token", result.credential?.access_token)
+    }
+
+    @Test
     fun redeemStoresCompanionCredentialAndNegotiatesV1() {
         val transport = ScriptedTransport(
             listOf(
@@ -131,15 +152,15 @@ class PairingClientTest {
 
     @Test
     fun requestConnectReportsAnOfflineDesktopBehindTheRelay() {
- for (status in listOf(502, 503, 504)) {
-     val transport = ScriptedTransport(listOf(HttpExchange(status, "")))
-     assertFailsWith<HostUnreachableException> {
-  PairingClient(transport).requestConnect(
-      HostOrigin.parse("https://vibex.xforever.xin/t/host-1"),
-      accountToken = "acct-token",
-         )
-     }
- }
+        for (status in listOf(502, 503, 504)) {
+            val transport = ScriptedTransport(listOf(HttpExchange(status, "")))
+            assertFailsWith<HostUnreachableException> {
+                PairingClient(transport).requestConnect(
+                    HostOrigin.parse("https://dimo-ai.com/t/host-1"),
+                    accountToken = "acct-token",
+                )
+            }
+        }
     }
 
     @Test
@@ -150,8 +171,8 @@ class PairingClientTest {
     }
 
     @Test
-    fun e2eeHandshakeAndAesGcmRoundTripSucceeds() {
-        val origin = "https://relay.example.com/t/host-e2ee-android"
+    fun e2eeHandshakeAesGcmAndClearSessionSucceed() {
+        val origin = "https://dimo-ai.com/t/host-e2ee-android"
         val session = E2eeSessionManager.ingestHandshake(
             origin,
             "sess-android-01",
@@ -164,6 +185,99 @@ class PairingClientTest {
         val cipherB64 = E2eeSessionManager.encryptString(session.aesKey, E2eeSessionManager.AAD_REQ, plain)
         val decrypted = E2eeSessionManager.decryptString(session.aesKey, E2eeSessionManager.AAD_REQ, cipherB64)
         assertEquals(plain, decrypted)
+
+        E2eeSessionManager.clearSession("$origin/api/v1/capabilities")
+        assertFalse(E2eeSessionManager.isE2eeActive(origin))
+        assertEquals(null, E2eeSessionManager.session(origin))
+
+        val rehandshaken = E2eeSessionManager.ingestHandshake(
+            origin,
+            "sess-android-02",
+            E2eeSessionManager.clientPublicKeyBase64,
+        )
+        assertEquals("sess-android-02", rehandshaken?.sessionId)
+        assertTrue(E2eeSessionManager.isE2eeActive(origin))
+    }
+
+    @Test
+    fun migratesLegacyRelayOriginsAndRedirectsRememberedBases() {
+        assertEquals(
+            "https://dimo-ai.com/t/host-123",
+            PairingClient.migrateLegacyRelayOrigin("https://vibex.xforever.xin/t/host-123"),
+        )
+        assertEquals(
+            "https://dimo-ai.com/t/host-123",
+            PairingClient.migrateLegacyRelayOrigin("http://vibex.xforever.xin/t/host-123/"),
+        )
+        assertEquals(
+            "https://dimo-ai.com/t/host-123",
+            PairingClient.migrateLegacyRelayOrigin("https://dimo-ai.com/t/host-123"),
+        )
+        assertEquals(
+            "https://custom-relay.example.com/t/host-123",
+            PairingClient.migrateLegacyRelayOrigin("https://custom-relay.example.com/t/host-123"),
+        )
+        assertEquals(
+            "http://192.168.1.8:17891",
+            PairingClient.migrateLegacyRelayOrigin("http://192.168.1.8:17891"),
+        )
+
+        PairingClient.rememberRelayBase("https://vibex.xforever.xin/t/host-123")
+        PairingClient.rememberRelayBase("http://vibex.xforever.xin")
+        val bases = PairingClient.knownRelayBases(listOf("https://vibex.xforever.xin/t/host-456"))
+        assertTrue(bases.contains("https://dimo-ai.com"))
+        assertTrue(bases.none { it.contains("vibex.xforever.xin") })
+
+        val rendezvous = PairingClient.resolveHostRendezvous("host-abc")
+        assertTrue(rendezvous.contains("https://dimo-ai.com/t/host-abc"))
+        assertTrue(DiscoveredLanHost("https://dimo-ai.com", "h1", "Mac").isCloudService)
+        assertTrue(DiscoveredLanHost("https://vibex.xforever.xin", "h1", "Mac").isCloudService)
+    }
+
+    @Test
+    fun filtersCellularAndVirtualNetworkInterfacesFromLanScan() {
+        val blocked = listOf(
+            null,
+            "",
+            "lo",
+            "lo0",
+            "rmnet0",
+            "rmnet_data0",
+            "ccmni0",
+            "ccmni1",
+            "pdp_ip0",
+            "clat4",
+            "v4-rmnet_data0",
+            "dummy0",
+            "utun0",
+            "tun0",
+            "tap0",
+            "ppp0",
+            "ipsec0",
+            "wg0",
+            "tailscale0",
+            "clash0",
+            "en_mihomo",
+            "surge-utun",
+        )
+        for (iface in blocked) {
+            assertFalse(PairingClient.isScannableLanInterfaceName(iface), "expected blocked: $iface")
+        }
+
+        val allowed = listOf(
+            "wlan0",
+            "wlan1",
+            "eth0",
+            "en0",
+            "ap0",
+            "swlan0",
+            "wifi0",
+            "rndis0",
+            "usb0",
+        )
+        for (iface in allowed) {
+            assertTrue(PairingClient.isScannableLanInterfaceName(iface), "expected allowed: $iface")
+        }
     }
 }
 

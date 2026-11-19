@@ -391,7 +391,7 @@ data class TimelineItem(
     val streaming: Boolean = false,
     val modelName: String? = null,
 ) {
-    enum class Role { User, Assistant }
+    enum class Role { User, Assistant, Divider }
 }
 
 object ToolInput {
@@ -486,7 +486,7 @@ object ToolInput {
     private fun extractQuestions(dict: Map<String, JsonValue>): List<FormQuestion> {
         val list = dict["questions"]?.asArray()?.value
         if (!list.isNullOrEmpty()) {
-            val wrapped = JsonValue.Object(mapOf("x-vibex-questions" to JsonValue.Array(list)))
+            val wrapped = JsonValue.Object(mapOf("x-dimo-questions" to JsonValue.Array(list)))
             val parsed = QuestionForm.parseQuestions(wrapped)
             if (parsed.isNotEmpty()) return parsed
         }
@@ -661,6 +661,15 @@ data class QueuedInput(
     val sortKey: Long = 0,
 )
 
+/** Rate-limit recovery state derived from a `rate_limited` turn error (host push channel is not on the remote WS). */
+data class RateLimitBanner(
+    val rowId: String,
+    val engine: String,
+    val resetAtMs: Long? = null,
+    val retryAfterSeconds: Long? = null,
+    val message: String = "",
+)
+
 data class SessionNotice(
     val id: String,
     val severity: NoticeSeverity,
@@ -672,6 +681,7 @@ data class SessionNotice(
 data class SessionConfigChoice(
     val value: String,
     val label: String,
+    val description: String? = null,
 )
 
 data class SessionConfigOption(
@@ -700,7 +710,10 @@ data class ConversationView(
     val pendingQuestion: PendingQuestion? = null,
     val queued: List<QueuedInput>,
     val inFlightTurnId: String?,
+    val isThinkingOrRunning: Boolean = inFlightTurnId != null,
     val canSteer: Boolean,
+    val steeringKnown: Boolean = false,
+    val rateLimit: RateLimitBanner? = null,
     val lastSequence: Long,
     val usageLabel: String?,
     val planLines: List<String>,
@@ -722,7 +735,13 @@ class TimelineSession {
     var workspaceId: String = ""
     var lastSequence: Long = 0
     var inFlightTurnId: String? = null
+    var optimisticUserText: String? = null
+    var optimisticBaselineUserCount: Int = 0
+    var optimisticThinkingUntilMs: Long = 0L
     var canSteer: Boolean = false
+    /** True once the host told us the binding's steering capability (conversation_detail). */
+    var steeringKnown: Boolean = false
+    var rateLimit: RateLimitBanner? = null
     var usageLabel: String? = null
     var fileChangeLabel: String? = null
     var agentStatus: String = ""
@@ -742,8 +761,32 @@ class TimelineSession {
     val availableCommands: MutableList<ComposerToken> = mutableListOf()
     val skillCommands: MutableList<ComposerToken> = mutableListOf()
 
-    fun snapshot(): ConversationView {
+    fun beginOptimisticSend(text: String, nowMs: Long = System.currentTimeMillis()) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        optimisticUserText = trimmed
+        optimisticBaselineUserCount = rows.count { it.kind == "user" && it.id.startsWith("tx:user:") }
+        optimisticThinkingUntilMs = nowMs + 15_000L
+        notices.removeAll { it.id.startsWith("end:") }
+        rows.removeAll { it.id.startsWith("end:") || it.id.startsWith("local:") }
+        rows += TimelineRow(
+            id = "local:$nowMs",
+            kind = "user",
+            title = "",
+            body = text,
+            tone = TimelineTone.Quiet,
+        )
+    }
+
+    fun clearOptimisticSend() {
+        optimisticUserText = null
+        optimisticThinkingUntilMs = 0L
+        rows.removeAll { it.id.startsWith("local:") }
+    }
+
+    fun snapshot(nowMs: Long = System.currentTimeMillis()): ConversationView {
         val builtItems = TimelineBuilder.buildItems(this)
+        val thinkingOrRunning = inFlightTurnId != null || optimisticThinkingUntilMs > nowMs
         return ConversationView(
             conversationId = conversationId,
             title = title.ifBlank { "会话" },
@@ -757,7 +800,10 @@ class TimelineSession {
             pendingQuestion = pendingQuestion,
             queued = queued.toList(),
             inFlightTurnId = inFlightTurnId,
+            isThinkingOrRunning = thinkingOrRunning,
             canSteer = canSteer,
+            steeringKnown = steeringKnown,
+            rateLimit = rateLimit,
             lastSequence = lastSequence,
             usageLabel = usageLabel,
             planLines = planLines.toList(),
@@ -917,6 +963,10 @@ object TimelineBuilder {
                     }
                     val combinedText = if (asst.text.isBlank()) row.body else "${asst.text}\n\n${row.body}"
                     currentAssistant = asst.copy(text = combinedText, segments = segments)
+                }
+                "agent_handoff" -> {
+                    flushAssistant()
+                    result += TimelineItem(id = row.id, role = TimelineItem.Role.Divider, text = row.body)
                 }
                 "turn_failed", "agent_binding_recovery_failed", "agent_binding_load_failed" -> {
                     if (row.body.isBlank()) continue

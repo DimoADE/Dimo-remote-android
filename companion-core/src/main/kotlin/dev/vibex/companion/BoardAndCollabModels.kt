@@ -687,14 +687,32 @@ data class CollabSpaceMessage(
     val origin: String? = null,
     val inReplyTo: String? = null,
     val streaming: Boolean = false,
+    val operationId: String? = null,
+    val turnId: String? = null,
     val receipts: List<CollabDeliveryReceipt> = emptyList(),
     val envelope: CollabMessageEnvelope = CollabMessageEnvelope(),
 ) {
     val id: String
         get() {
             val candidate = (rawId ?: envelope.id.orEmpty()).replace("vibex://space-message/", "")
-            return candidate.ifBlank { "seq-$seq" }
+            if (candidate.isNotBlank()) return candidate
+            if (streaming) {
+                val draftKey = turnId?.takeIf { it.isNotBlank() }
+                    ?: operationId?.takeIf { it.isNotBlank() }
+                    ?: envelope.sender.takeIf { it.isNotBlank() }
+                if (draftKey != null) return "draft:$draftKey"
+            }
+            if (!operationId.isNullOrBlank() && seq <= 0) return "op:$operationId"
+            return "seq-$seq"
         }
+
+    val isStreamingDraft: Boolean
+        get() = streaming || id.startsWith("draft:") || (rawId?.startsWith("draft:") == true)
+
+    val effectiveTurnId: String?
+        get() = turnId?.takeIf { it.isNotBlank() }
+            ?: id.takeIf { it.startsWith("draft:") }?.removePrefix("draft:")?.takeIf { it.isNotBlank() }
+            ?: rawId?.takeIf { it.startsWith("draft:") }?.removePrefix("draft:")?.takeIf { it.isNotBlank() }
 
     val isFromUser: Boolean
         get() = origin == "user" || envelope.isFromUser
@@ -741,7 +759,46 @@ data class CollabMessagesPage(
     val scheduled: List<CollabScheduledMessage> = emptyList(),
     val cards: List<CollabCard> = emptyList(),
     val conversationId: String? = null,
+    val hasMoreBefore: Boolean = false,
+    val oldestSeq: Long? = null,
 )
+
+typealias CollabSpaceMessagePage = CollabMessagesPage
+
+data class CollabEmbeddedCard(
+    val id: String = "",
+    val kind: String = "ask",
+    val status: String? = null,
+    val question: String? = null,
+    val options: List<String> = emptyList(),
+    val action: String? = null,
+    val command: String? = null,
+    val reason: String? = null,
+    val body: String = "",
+)
+
+data class CollabEmbeddedHandoff(
+    val id: String = "",
+    val from: String? = null,
+    val to: String? = null,
+    val depth: String? = null,
+    val summary: String = "",
+    val ask: String? = null,
+    val done: String? = null,
+    val inputsConstraints: String? = null,
+)
+
+data class CollabParsedMessageContent(
+    val cleanText: String,
+    val cards: List<CollabEmbeddedCard> = emptyList(),
+    val handoffs: List<CollabEmbeddedHandoff> = emptyList(),
+    val lineCount: Int = countCollabMessageLines(cleanText),
+    val isCollapsible: Boolean = shouldCollapseLongMessage(cleanText),
+) {
+    val card: CollabEmbeddedCard? get() = cards.firstOrNull()
+    val handoff: CollabEmbeddedHandoff? get() = handoffs.firstOrNull()
+    val hasStructuredBlocks: Boolean get() = cards.isNotEmpty() || handoffs.isNotEmpty()
+}
 
 data class CollabMemoryFact(
     val id: Int,
@@ -1210,13 +1267,34 @@ fun HostApi.collabSpaceMembers(origin: HostOrigin, token: String, spaceId: Strin
     }
 }
 
-fun HostApi.collabMessagesPage(origin: HostOrigin, token: String, spaceId: String, limit: Int = 200): CollabMessagesPage {
-    val root = collaboration(
-        origin,
-        token,
-        "space.listMessages",
-        mapOf("spaceId" to spaceId, "latest" to true, "limit" to limit.toDouble()),
-    ).asObject() ?: return CollabMessagesPage()
+internal fun buildCollabListMessagesInput(
+    spaceId: String,
+    limit: Int = 80,
+    sinceSeq: Long? = null,
+    beforeSeq: Long? = null,
+    latest: Boolean = sinceSeq == null && beforeSeq == null,
+): Map<String, Any?> {
+    return when {
+        beforeSeq != null -> linkedMapOf(
+            "spaceId" to spaceId,
+            "beforeSeq" to beforeSeq,
+            "limit" to limit,
+        )
+        sinceSeq != null && sinceSeq > 0L -> linkedMapOf(
+            "spaceId" to spaceId,
+            "sinceSeq" to sinceSeq,
+            "limit" to limit,
+        )
+        else -> linkedMapOf(
+            "spaceId" to spaceId,
+            "latest" to if (latest) true else true,
+            "limit" to limit,
+        )
+    }
+}
+
+fun parseCollabMessagesPage(root: JsonValue.Object?, fallbackSpaceId: String = ""): CollabMessagesPage {
+    if (root == null) return CollabMessagesPage()
 
     val messages = root.arrAny("messages", "items").orEmpty().mapNotNull { item ->
         val obj = item.asObject() ?: return@mapNotNull null
@@ -1252,6 +1330,8 @@ fun HostApi.collabMessagesPage(origin: HostOrigin, token: String, spaceId: Strin
             origin = obj.textOrNull("origin"),
             inReplyTo = obj.textAny("in_reply_to", "inReplyTo").ifBlank { null },
             streaming = obj.boolAny("streaming") ?: false,
+            operationId = obj.textAny("operationId", "operation_id").ifBlank { null },
+            turnId = obj.textAny("turnId", "turn_id").ifBlank { null },
             receipts = receipts,
             envelope = envelope,
         )
@@ -1261,7 +1341,7 @@ fun HostApi.collabMessagesPage(origin: HostOrigin, token: String, spaceId: Strin
         val obj = item.asObject() ?: return@mapNotNull null
         CollabScheduledMessage(
             id = obj.textAny("id", "delayed_input_id").ifBlank { UUID.randomUUID().toString() },
-            spaceId = obj.textAny("space_id", "spaceId").ifBlank { spaceId },
+            spaceId = obj.textAny("space_id", "spaceId").ifBlank { fallbackSpaceId },
             content = obj.textAny("content"),
             deliverAt = obj.textAny("deliver_at", "deliverAt"),
             status = obj.textOrNull("status"),
@@ -1288,7 +1368,384 @@ fun HostApi.collabMessagesPage(origin: HostOrigin, token: String, spaceId: Strin
         scheduled = scheduled,
         cards = cards,
         conversationId = root.textAny("conversationId", "conversation_id").ifBlank { null },
+        hasMoreBefore = root.boolAny("hasMoreBefore", "has_more_before") ?: false,
+        oldestSeq = root.longAny("oldestSeq", "oldest_seq"),
     )
+}
+
+fun HostApi.collabMessagesPage(
+    origin: HostOrigin,
+    token: String,
+    spaceId: String,
+    limit: Int = 80,
+    sinceSeq: Long? = null,
+    beforeSeq: Long? = null,
+    latest: Boolean = sinceSeq == null && beforeSeq == null,
+): CollabMessagesPage {
+    val input = buildCollabListMessagesInput(
+        spaceId = spaceId,
+        limit = limit,
+        sinceSeq = sinceSeq,
+        beforeSeq = beforeSeq,
+        latest = latest,
+    )
+    val root = collaboration(origin, token, "space.listMessages", input).asObject()
+    return parseCollabMessagesPage(root, fallbackSpaceId = spaceId)
+}
+
+fun HostApi.collabMessages(
+    origin: HostOrigin,
+    token: String,
+    spaceId: String,
+    limit: Int = 80,
+    sinceSeq: Long? = null,
+    beforeSeq: Long? = null,
+    latest: Boolean = sinceSeq == null && beforeSeq == null,
+): CollabMessagesPage = collabMessagesPage(
+    origin = origin,
+    token = token,
+    spaceId = spaceId,
+    limit = limit,
+    sinceSeq = sinceSeq,
+    beforeSeq = beforeSeq,
+    latest = latest,
+)
+
+private fun explicitCollabMessageId(msg: CollabSpaceMessage): String? =
+    (msg.rawId ?: msg.envelope.id)
+        ?.replace("vibex://space-message/", "")
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+
+private fun mergeCollabMessageFields(older: CollabSpaceMessage, newer: CollabSpaceMessage): CollabSpaceMessage =
+    newer.copy(
+        rawId = newer.rawId ?: older.rawId,
+        inReplyTo = newer.inReplyTo ?: older.inReplyTo,
+        operationId = newer.operationId ?: older.operationId,
+        turnId = newer.turnId ?: older.turnId,
+    )
+
+fun mergeCollabMessages(
+    existing: List<CollabSpaceMessage>,
+    incoming: List<CollabSpaceMessage>,
+    isIncremental: Boolean = true,
+): List<CollabSpaceMessage> {
+    if (!isIncremental) {
+        return mergeCollabMessages(emptyList(), incoming, isIncremental = true)
+    }
+    if (existing.isEmpty() && incoming.isEmpty()) return emptyList()
+
+    val result = existing.toMutableList()
+    val maxExistingConfirmedSeq = existing
+        .asSequence()
+        .filter { !it.isStreamingDraft && it.seq > 0 }
+        .maxOfOrNull { it.seq } ?: 0
+
+    for (inc in incoming) {
+        val incExplicitId = explicitCollabMessageId(inc)
+        val incTurnId = inc.effectiveTurnId
+        val incOpId = inc.operationId?.takeIf { it.isNotBlank() }
+
+        if (inc.isStreamingDraft) {
+            val alreadyFinalized = result.any { ex ->
+                !ex.isStreamingDraft && ex.seq > 0 && (
+                    (incTurnId != null && ex.effectiveTurnId == incTurnId) ||
+                        (incOpId != null && ex.operationId == incOpId)
+                    )
+            }
+            if (alreadyFinalized) continue
+
+            val draftIdx = result.indexOfFirst { ex ->
+                ex.isStreamingDraft && (
+                    (incExplicitId != null && explicitCollabMessageId(ex) == incExplicitId) ||
+                        (ex.id == inc.id) ||
+                        (incTurnId != null && ex.effectiveTurnId == incTurnId) ||
+                        (incOpId != null && ex.operationId == incOpId) ||
+                        (
+                            (incTurnId == null || ex.effectiveTurnId == null) &&
+                                inc.envelope.sender.isNotBlank() &&
+                                ex.envelope.sender.equals(inc.envelope.sender, ignoreCase = true)
+                            )
+                    )
+            }
+            if (draftIdx >= 0) {
+                result[draftIdx] = mergeCollabMessageFields(result[draftIdx], inc)
+            } else {
+                result.add(inc)
+            }
+        } else {
+            result.removeAll { ex ->
+                ex.isStreamingDraft && (
+                    (incExplicitId != null && explicitCollabMessageId(ex) == incExplicitId) ||
+                        (incTurnId != null && ex.effectiveTurnId == incTurnId) ||
+                        (incOpId != null && ex.operationId == incOpId) ||
+                        (
+                            inc.seq > 0 &&
+                                inc.envelope.sender.isNotBlank() &&
+                                ex.envelope.sender.equals(inc.envelope.sender, ignoreCase = true) &&
+                                (
+                                    inc.seq > maxExistingConfirmedSeq ||
+                                        (
+                                            ex.envelope.content.isNotBlank() &&
+                                                inc.envelope.content.trim().startsWith(
+                                                    ex.envelope.content.trim().take(48),
+                                                )
+                                            )
+                                    )
+                            )
+                    )
+            }
+
+            val existingIdx = result.indexOfFirst { ex ->
+                !ex.isStreamingDraft && (
+                    (incExplicitId != null && explicitCollabMessageId(ex) == incExplicitId) ||
+                        (inc.rawId != null && inc.rawId.isNotBlank() && ex.rawId == inc.rawId) ||
+                        (incOpId != null && ex.operationId == incOpId) ||
+                        (inc.seq > 0 && ex.seq == inc.seq)
+                    )
+            }
+            if (existingIdx >= 0) {
+                result[existingIdx] = mergeCollabMessageFields(result[existingIdx], inc)
+            } else {
+                result.add(inc)
+            }
+        }
+    }
+
+    val confirmed = result
+        .filterNot { it.isStreamingDraft }
+        .withIndex()
+        .sortedWith(
+            compareBy<IndexedValue<CollabSpaceMessage>> { if (it.value.seq > 0) 0 else 1 }
+                .thenBy { it.value.seq }
+                .thenBy { it.index },
+        )
+        .map { it.value }
+    val drafts = result.filter { it.isStreamingDraft }
+
+    val dedupById = LinkedHashMap<String, CollabSpaceMessage>(confirmed.size + drafts.size)
+    for (msg in confirmed) dedupById[msg.id] = msg
+    for (msg in drafts) dedupById[msg.id] = msg
+    return dedupById.values.toList()
+}
+
+fun reconcileCollabStreamingDrafts(
+    merged: List<CollabSpaceMessage>,
+    activeTailPage: List<CollabSpaceMessage>,
+): List<CollabSpaceMessage> {
+    if (merged.none { it.isStreamingDraft }) return merged
+    val activeDrafts = activeTailPage.filter { it.isStreamingDraft }
+    if (activeDrafts.isEmpty()) {
+        return merged.filterNot { it.isStreamingDraft }
+    }
+    return merged.filter { msg ->
+        if (!msg.isStreamingDraft) return@filter true
+        val explicitId = explicitCollabMessageId(msg)
+        val turnId = msg.effectiveTurnId
+        activeDrafts.any { live ->
+            live.id == msg.id ||
+                (explicitId != null && explicitCollabMessageId(live) == explicitId) ||
+                (turnId != null && live.effectiveTurnId == turnId) ||
+                (
+                    msg.envelope.sender.isNotBlank() &&
+                        live.envelope.sender.equals(msg.envelope.sender, ignoreCase = true)
+                    )
+        }
+    }
+}
+
+fun buildCollabMessageLookup(messages: List<CollabSpaceMessage>): Map<String, CollabSpaceMessage> {
+    if (messages.isEmpty()) return emptyMap()
+    val map = HashMap<String, CollabSpaceMessage>(messages.size * 3)
+    for (msg in messages) {
+        map[msg.id] = msg
+        map["vibex://space-message/${msg.id}"] = msg
+        msg.rawId?.takeIf { it.isNotBlank() }?.let { map[it] = msg }
+        msg.envelope.id?.takeIf { it.isNotBlank() }?.let { map[it] = msg }
+    }
+    return map
+}
+
+fun lookupCollabReplyMessage(
+    lookup: Map<String, CollabSpaceMessage>,
+    inReplyTo: String?,
+): CollabSpaceMessage? {
+    val ref = inReplyTo?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    return lookup[ref] ?: lookup[ref.removePrefix("vibex://space-message/")]
+}
+
+private val CollabCardBlockRegex = Regex("""<card\b([^>]*)>([\s\S]*?)</card>""", RegexOption.IGNORE_CASE)
+private val CollabUnclosedCardRegex = Regex("""<card\b[^>]*>[\s\S]*$""", RegexOption.IGNORE_CASE)
+private val CollabHandoffBlockRegex = Regex("""<handoff\b([^>]*)>([\s\S]*?)</handoff>""", RegexOption.IGNORE_CASE)
+private val CollabSelfClosingHandoffRegex = Regex("""<handoff\b([^>]*?)/>""", RegexOption.IGNORE_CASE)
+private val CollabUnclosedHandoffRegex = Regex("""<handoff\b[^>]*>[\s\S]*$""", RegexOption.IGNORE_CASE)
+private val CollabAnyXmlTagRegex = Regex("""</?[a-zA-Z0-9_:-]+(?:\s[^>]*)?>""")
+private val CollabExcessBlankLinesRegex = Regex("""\n{3,}""")
+
+private fun unescapeCollabXml(raw: String): String =
+    raw
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+
+private fun extractXmlAttr(attrs: String, name: String): String? {
+    val regex = Regex("""\b$name\s*=\s*(?:"([^"]*)"|'([^']*)')""", RegexOption.IGNORE_CASE)
+    val match = regex.find(attrs) ?: return null
+    val value = match.groups[1]?.value ?: match.groups[2]?.value ?: return null
+    return unescapeCollabXml(value.trim()).takeIf { it.isNotEmpty() }
+}
+
+private fun extractXmlField(inner: String, tag: String): String? {
+    val regex = Regex("""<$tag\b[^>]*>([\s\S]*?)</$tag>""", RegexOption.IGNORE_CASE)
+    val match = regex.find(inner) ?: return null
+    return unescapeCollabXml(match.groupValues[1].trim()).takeIf { it.isNotEmpty() }
+}
+
+private fun parseEmbeddedCard(attrs: String, inner: String): CollabEmbeddedCard {
+    val id = extractXmlAttr(attrs, "id") ?: extractXmlField(inner, "id").orEmpty()
+    val kind = (extractXmlAttr(attrs, "kind") ?: extractXmlField(inner, "kind") ?: "ask").lowercase()
+    val status = extractXmlAttr(attrs, "status") ?: extractXmlField(inner, "status")
+    val question = extractXmlField(inner, "question")
+    val optionsRaw = extractXmlField(inner, "options")
+    val options = optionsRaw
+        ?.split('|')
+        ?.map { it.trim() }
+        ?.filter { it.isNotEmpty() }
+        .orEmpty()
+    val action = extractXmlField(inner, "action")
+    val command = extractXmlField(inner, "command")
+    val reason = extractXmlField(inner, "reason")
+    val explicitBody = extractXmlField(inner, "body")
+    val strippedFallback = unescapeCollabXml(
+        inner
+            .replace(Regex("""<questions\b[^>]*>[\s\S]*?</questions>""", RegexOption.IGNORE_CASE), "")
+            .replace(CollabAnyXmlTagRegex, " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim(),
+    )
+    val body = when (kind) {
+        "approval" -> listOfNotNull(action, reason, explicitBody)
+            .firstOrNull { it.isNotBlank() }
+            ?: command
+            ?: strippedFallback
+        else -> listOfNotNull(question, explicitBody, action, reason)
+            .firstOrNull { it.isNotBlank() }
+            ?: strippedFallback
+    }
+    return CollabEmbeddedCard(
+        id = id,
+        kind = kind,
+        status = status,
+        question = question,
+        options = options,
+        action = action,
+        command = command,
+        reason = reason,
+        body = body,
+    )
+}
+
+private fun parseEmbeddedHandoff(attrs: String, inner: String): CollabEmbeddedHandoff {
+    val id = extractXmlAttr(attrs, "id") ?: extractXmlField(inner, "id").orEmpty()
+    val from = extractXmlAttr(attrs, "from")
+        ?: extractXmlAttr(attrs, "sender")
+        ?: extractXmlField(inner, "from")
+    val to = extractXmlAttr(attrs, "to")
+        ?: extractXmlAttr(attrs, "target")
+        ?: extractXmlAttr(attrs, "recipient")
+        ?: extractXmlField(inner, "to")
+    val depth = extractXmlAttr(attrs, "depth") ?: extractXmlField(inner, "depth")
+    val ask = extractXmlField(inner, "ask") ?: extractXmlAttr(attrs, "ask")
+    val done = extractXmlField(inner, "done")
+    val constraints = extractXmlField(inner, "inputs_constraints") ?: extractXmlField(inner, "constraints")
+    val explicitSummary = extractXmlField(inner, "summary") ?: extractXmlAttr(attrs, "summary")
+    val strippedInner = unescapeCollabXml(
+        inner.replace(CollabAnyXmlTagRegex, "\n").lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString(" · "),
+    )
+    val summary = listOfNotNull(explicitSummary, ask, done, strippedInner.takeIf { it.isNotEmpty() })
+        .firstOrNull { it.isNotBlank() }
+        .orEmpty()
+    return CollabEmbeddedHandoff(
+        id = id,
+        from = from,
+        to = to,
+        depth = depth,
+        summary = summary,
+        ask = ask,
+        done = done,
+        inputsConstraints = constraints,
+    )
+}
+
+fun countCollabMessageLines(text: String): Int {
+    val normalized = text.replace("\r\n", "\n").trim()
+    if (normalized.isEmpty()) return 0
+    return normalized.count { it == '\n' } + 1
+}
+
+fun shouldCollapseLongMessage(
+    text: String,
+    maxLines: Int = 12,
+    maxChars: Int = 480,
+): Boolean {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return false
+    if (trimmed.length > maxChars) return true
+    return countCollabMessageLines(trimmed) > maxLines
+}
+
+fun parseCollabStructuredMessage(rawContent: String): CollabParsedMessageContent {
+    if (rawContent.isEmpty()) {
+        return CollabParsedMessageContent(cleanText = "", lineCount = 0, isCollapsible = false)
+    }
+    val cards = mutableListOf<CollabEmbeddedCard>()
+    val handoffs = mutableListOf<CollabEmbeddedHandoff>()
+
+    for (match in CollabCardBlockRegex.findAll(rawContent)) {
+        cards += parseEmbeddedCard(match.groupValues[1], match.groupValues[2])
+    }
+    for (match in CollabHandoffBlockRegex.findAll(rawContent)) {
+        handoffs += parseEmbeddedHandoff(match.groupValues[1], match.groupValues[2])
+    }
+    for (match in CollabSelfClosingHandoffRegex.findAll(rawContent)) {
+        handoffs += parseEmbeddedHandoff(match.groupValues[1], "")
+    }
+
+    val cleaned = rawContent
+        .replace("\r\n", "\n")
+        .replace(CollabCardBlockRegex, "")
+        .replace(CollabHandoffBlockRegex, "")
+        .replace(CollabSelfClosingHandoffRegex, "")
+        .replace(CollabUnclosedCardRegex, "")
+        .replace(CollabUnclosedHandoffRegex, "")
+        .replace(CollabExcessBlankLinesRegex, "\n\n")
+        .trim()
+
+    return CollabParsedMessageContent(
+        cleanText = cleaned,
+        cards = cards,
+        handoffs = handoffs,
+        lineCount = countCollabMessageLines(cleaned),
+        isCollapsible = shouldCollapseLongMessage(cleaned),
+    )
+}
+
+fun collabMessagePreviewText(rawContent: String): String {
+    val parsed = parseCollabStructuredMessage(rawContent)
+    if (parsed.cleanText.isNotBlank()) {
+        return parsed.cleanText.replace(Regex("""\s+"""), " ").trim()
+    }
+    parsed.card?.let { c ->
+        val prefix = if (c.kind == "approval") "[审批]" else "[提问]"
+        return if (c.body.isNotBlank()) "$prefix ${c.body}" else prefix
+    }
+    parsed.handoff?.let { h ->
+        return if (h.summary.isNotBlank()) "[交接] ${h.summary}" else "[交接]"
+    }
+    return rawContent.replace(Regex("""\s+"""), " ").trim()
 }
 
 fun HostApi.collabPostMessage(
@@ -1299,19 +1756,20 @@ fun HostApi.collabPostMessage(
     to: List<String> = emptyList(),
     inReplyTo: String? = null,
     delaySeconds: Int? = null,
+    operationId: String = UUID.randomUUID().toString().lowercase(),
 ) {
     val input = linkedMapOf<String, Any?>(
         "spaceId" to spaceId,
         "content" to content,
-        "operationId" to UUID.randomUUID().toString().lowercase(),
+        "operationId" to operationId,
     )
     if (to.isNotEmpty()) input["to"] = to
     if (!inReplyTo.isNullOrBlank()) input["inReplyTo"] = inReplyTo
     if (delaySeconds != null && delaySeconds > 0) {
         input["delaySeconds"] = delaySeconds
-        collaboration(origin, token, "space.post", input)
+        collaboration(origin, token, "space.post", input, operationId)
     } else {
-        collaboration(origin, token, "space.submit", input)
+        collaboration(origin, token, "space.submit", input, operationId)
     }
 }
 
@@ -1497,4 +1955,30 @@ fun HostApi.collabTeamsList(origin: HostOrigin, token: String, workspaceId: Stri
             summary = to.textOrNull("summary")?.takeIf { it.isNotBlank() },
         )
     }
+}
+
+/** An `@query` token ending at the caret. [start] is the index of '@'. */
+data class MentionToken(val start: Int, val end: Int, val query: String)
+
+fun mentionTokenAt(text: String, caret: Int): MentionToken? {
+    val end = caret.coerceIn(0, text.length)
+    var i = end
+    while (i > 0) {
+        val ch = text[i - 1]
+        if (ch == '@') {
+            val before = if (i - 1 > 0) text[i - 2] else ' '
+            if (!before.isWhitespace()) return null
+            return MentionToken(i - 1, end, text.substring(i, end))
+        }
+        if (ch.isWhitespace()) return null
+        i--
+    }
+    return null
+}
+
+/** Replaces [token] with `@label ` and returns the new text and caret index. */
+fun applyMention(text: String, token: MentionToken, label: String): Pair<String, Int> {
+    val insert = "@$label "
+    val next = text.substring(0, token.start) + insert + text.substring(token.end)
+    return next to (token.start + insert.length)
 }

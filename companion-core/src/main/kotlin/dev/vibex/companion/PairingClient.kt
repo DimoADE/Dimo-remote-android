@@ -59,7 +59,20 @@ data class DiscoveredLanHost(
     val origin: String,
     val hostId: String?,
     val name: String,
-)
+) {
+    val id: String
+        get() = hostId ?: origin
+
+    val isCloudService: Boolean
+        get() = origin.contains("/t/") || origin.contains("dimo-ai.com") || origin.contains("vibex.xforever.xin")
+
+    val displayName: String
+        get() {
+            val trimmed = name.trim()
+            if (trimmed.isNotEmpty() && !trimmed.startsWith("http")) return trimmed
+            return origin.removePrefix("http://").removePrefix("https://")
+        }
+}
 
 data class DeviceConnectRequestResult(
     val requestId: String,
@@ -231,26 +244,76 @@ class PairingClient(
 
     companion object {
         const val CLIENT_PROTOCOL_VERSION = "1.0"
-        const val PROTOCOL_HEADER = "x-vibex-protocol-version"
+        const val PROTOCOL_HEADER = "x-dimo-protocol-version"
         const val DEFAULT_OFFICIAL_RELAY_PORT = 443
+        private const val OFFICIAL_DOMAIN_BASE = "https://dimo-ai.com"
+        private val LEGACY_RELAY_TENANT_REGEX =
+            Regex("""^https?://vibex\.xforever\.xin(?::(?:80|443))?/t/(.+)$""", RegexOption.IGNORE_CASE)
+        private val IGNORED_INTERFACE_PREFIXES = listOf(
+            "rmnet", "ccmni", "pdp", "clat", "v4-", "dummy", "lo",
+            "utun", "tun", "tap", "ppp", "ipsec", "wg", "tailscale",
+            "clash", "mihomo", "surge",
+        )
+        private val ALLOWED_LAN_INTERFACE_PREFIXES = listOf(
+            "wlan", "eth", "en", "ap", "swlan", "wifi", "rndis", "usb",
+        )
+
         val DEFAULT_OFFICIAL_RELAY_BASE: String =
-            System.getenv("VIBEX_RELAY_URL")?.trim()?.takeIf { it.isNotEmpty() } ?: "https://vibex.xforever.xin"
+            (System.getenv("DIMO_RELAY_URL") ?: System.getenv("VIBEX_RELAY_URL"))
+                ?.trim()
+                ?.trimEnd('/')
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { raw ->
+                    if (raw.contains("vibex.xforever.xin", ignoreCase = true)) OFFICIAL_DOMAIN_BASE else raw
+                }
+                ?: OFFICIAL_DOMAIN_BASE
         const val HAPPY_EYEBALLS_LAN_WINDOW_MS = 250L
 
         private val rememberedRelayBases = java.util.concurrent.CopyOnWriteArraySet<String>(
             listOf(DEFAULT_OFFICIAL_RELAY_BASE).filter { it.isNotBlank() },
         )
 
+        fun migrateLegacyRelayOrigin(url: String): String {
+            val trimmed = url.trim()
+            val match = LEGACY_RELAY_TENANT_REGEX.matchEntire(trimmed)
+            if (match != null) {
+                val rest = match.groupValues[1].trimEnd('/')
+                if (rest.isNotEmpty()) {
+                    return "$OFFICIAL_DOMAIN_BASE/t/$rest"
+                }
+            }
+            return url
+        }
+
+        fun isScannableLanInterfaceName(rawName: String?): Boolean {
+            val name = rawName?.trim()?.lowercase().orEmpty()
+            if (name.isEmpty()) return false
+            if (
+                IGNORED_INTERFACE_PREFIXES.any { prefix ->
+                    name.startsWith(prefix) ||
+                        ((prefix == "clash" || prefix == "mihomo" || prefix == "surge") && name.contains(prefix))
+                }
+            ) {
+                return false
+            }
+            return ALLOWED_LAN_INTERFACE_PREFIXES.any { name.startsWith(it) }
+        }
+
         fun rememberRelayBase(originOrBaseUrl: String) {
-            val trimmed = originOrBaseUrl.trim().trimEnd('/')
+            val trimmed = migrateLegacyRelayOrigin(originOrBaseUrl.trim()).trimEnd('/')
             if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return
-            val base = if (trimmed.contains("/t/")) {
+            val rawBase = if (trimmed.contains("/t/")) {
                 trimmed.substringBefore("/t/")
             } else {
                 val uri = runCatching { URI(trimmed) }.getOrNull() ?: return
                 val host = uri.host ?: return
                 val port = if (uri.port == -1) "" else ":${uri.port}"
                 "${uri.scheme}://$host$port"
+            }
+            val base = if (rawBase.contains("vibex.xforever.xin", ignoreCase = true)) {
+                OFFICIAL_DOMAIN_BASE
+            } else {
+                rawBase
             }
             if (
                 base.isNotBlank() &&
@@ -269,16 +332,21 @@ class PairingClient(
                 }
             }
             val bases = LinkedHashSet<String>()
-            System.getProperty("vibex.relay.url")?.trim()?.takeIf { it.isNotEmpty() }?.let {
-                rememberRelayBase(it)
-            }
-            bases.addAll(rememberedRelayBases)
+            (System.getProperty("dimo.relay.url") ?: System.getProperty("vibex.relay.url"))
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { rememberRelayBase(it) }
+            bases.addAll(
+                rememberedRelayBases.map {
+                    if (it.contains("vibex.xforever.xin", ignoreCase = true)) OFFICIAL_DOMAIN_BASE else it
+                },
+            )
             return bases.toList()
         }
 
         fun probeHostHealth(
             originUrl: String,
-            timeoutMs: Int = 350,
+            timeoutMs: Int = 800,
             expectedHostId: String? = null,
         ): DiscoveredLanHost? {
             return runCatching {
@@ -321,31 +389,25 @@ class PairingClient(
             }.getOrNull()
         }
 
-        fun discoverLanHosts(port: Int = 17891): List<DiscoveredLanHost> {
+        fun discoverLanHosts(
+            port: Int = 17891,
+            includeEmulatorLoopback: Boolean = false,
+        ): List<DiscoveredLanHost> {
             val candidates = LinkedHashSet<String>()
-            val localPorts = (listOf(port, 17899) + (17891..17899)).distinct()
-            for (localPort in localPorts) {
-                candidates.add("http://127.0.0.1:$localPort")
-                candidates.add("http://10.0.2.2:$localPort")
+            if (includeEmulatorLoopback) {
+                val localPorts = (listOf(port, 17899) + (17891..17899)).distinct()
+                for (localPort in localPorts) {
+                    candidates.add("http://127.0.0.1:$localPort")
+                    candidates.add("http://10.0.2.2:$localPort")
+                }
             }
             val lanPorts = listOf(port, 17899).distinct()
 
             runCatching {
                 val interfaces = NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
                 for (iface in interfaces) {
-                    val name = iface.name?.lowercase().orEmpty()
                     if (!iface.isUp || iface.isLoopback) continue
-                    if (
-                        name.startsWith("utun") ||
-                        name.startsWith("tun") ||
-                        name.startsWith("tap") ||
-                        name.startsWith("ppp") ||
-                        name.contains("clash") ||
-                        name.contains("mihomo") ||
-                        name.contains("surge")
-                    ) {
-                        continue
-                    }
+                    if (!isScannableLanInterfaceName(iface.name)) continue
                     for (addr in iface.inetAddresses.toList()) {
                         if (addr !is Inet4Address || addr.isLoopbackAddress) continue
                         val raw = addr.address
@@ -370,7 +432,9 @@ class PairingClient(
                 }
             }
 
-            val pool = Executors.newFixedThreadPool(64)
+            if (candidates.isEmpty()) return emptyList()
+
+            val pool = Executors.newFixedThreadPool(minOf(64, candidates.size))
             val localFound = try {
                 val tasks = candidates.map { url ->
                     Callable { probeHostHealth(url, timeoutMs = 280) }
@@ -403,7 +467,7 @@ class PairingClient(
         fun resolveHostRendezvous(
             hostId: String,
             knownOrigins: Collection<String> = emptyList(),
-            timeoutMs: Int = 2000,
+            @Suppress("UNUSED_PARAMETER") timeoutMs: Int = 2000,
         ): List<String> {
             val cleanId = hostId.trim()
             if (cleanId.isEmpty() || cleanId.startsWith("host:")) return emptyList()
@@ -411,17 +475,8 @@ class PairingClient(
             if (bases.isEmpty()) return emptyList()
 
             val resolved = LinkedHashSet<String>()
-            // 1. Deterministic multi-tenant path on every known domestic relay base (0ms)
             for (base in bases) {
                 resolved.add("${base.trimEnd('/')}/t/$cleanId")
-            }
-            // 2. Domestic beacon lookup on each relay base
-            val topicHash = sha256Hex("vibex-host-v1:$cleanId").take(32)
-            val topic = "vbx-h-$topicHash"
-            for (base in bases) {
-                for (origin in queryDomesticBeaconOrigins(base, topic, expectedHostId = cleanId, timeoutMs = timeoutMs)) {
-                    resolved.add(origin)
-                }
             }
             return resolved.toList()
         }
@@ -483,6 +538,10 @@ class PairingClient(
     }
 }
 
+/** Mutating requests (message submit, input) can be slow behind E2EE/relay; give them more time than reads. */
+fun requestReadTimeoutMs(method: String, isPrivateLan: Boolean): Int =
+    if (!method.equals("GET", ignoreCase = true)) 60_000 else if (isPrivateLan) 15_000 else 20_000
+
 class UrlConnectionTransport : HttpTransport {
     override fun execute(
         method: String,
@@ -490,9 +549,11 @@ class UrlConnectionTransport : HttpTransport {
         headers: Map<String, String>,
         body: String?,
     ): HttpExchange {
+        val hadActiveE2ee = E2eeSessionManager.isE2eeActive(url)
         val first = executeOnce(method, url, headers, body, allowBootstrap = true)
-        if (first.status == 412) {
-            return executeOnce(method, url, headers, body, allowBootstrap = false)
+        if (first.status == 412 || (first.status == 401 && hadActiveE2ee)) {
+            E2eeSessionManager.clearSession(url)
+            return executeOnce(method, url, headers, body, allowBootstrap = true)
         }
         return first
     }
@@ -528,8 +589,8 @@ class UrlConnectionTransport : HttpTransport {
         }
 
         val connection = URI(url).toURL().openConnection() as HttpURLConnection
-        connection.connectTimeout = if (isPrivateLan) 2_200 else 10_000
-        connection.readTimeout = if (isPrivateLan) 4_000 else 20_000
+        connection.connectTimeout = if (isPrivateLan) 2_500 else 10_000
+        connection.readTimeout = requestReadTimeoutMs(method, isPrivateLan)
         connection.requestMethod = method
         connection.doInput = true
         val mutableHeaders = LinkedHashMap(headers)

@@ -7,6 +7,7 @@ import dev.vibex.companion.asText
 import dev.vibex.companion.asArray
 import dev.vibex.companion.asNumber
 import dev.vibex.companion.encodeObject
+import dev.vibex.companion.app.ui.theme.AppLanguage
 import dev.vibex.companion.app.ui.theme.Appearance
 import dev.vibex.companion.app.ui.theme.AccentChoice
 import java.io.File
@@ -20,6 +21,10 @@ class ProfileStore(context: Context) {
         val root = JsonValue.parse(file.readText()) as? JsonValue.Object ?: return StoredState()
         val selected = root.value["selected"]?.asText()
         val appearance = Appearance.from(root.value["appearance"]?.asText())
+        val language = AppLanguage.from(root.value["language"]?.asText())
+        val confirmHighRiskApproval = (root.value["confirmHighRiskApproval"] as? JsonValue.Bool)?.value ?: true
+        val muteForegroundNotifications = (root.value["muteForegroundNotifications"] as? JsonValue.Bool)?.value ?: true
+        val customRelayOrigin = root.value["customRelayOrigin"]?.asText()?.trim().orEmpty()
         val accent = AccentChoice.from(root.value["accent"]?.asText())
         val streamDisplay = StreamDisplayPrefs.from(root.value["streamDisplay"])
         val profiles = root.value["profiles"]?.asArray()?.value.orEmpty().mapNotNull { item ->
@@ -40,7 +45,17 @@ class ProfileStore(context: Context) {
                 selectedProjectId = obj.value["selectedProjectId"]?.asText(),
             )
         }
-        return StoredState(selected, profiles, appearance, streamDisplay, accent)
+        return StoredState(
+            selectedHostId = selected,
+            profiles = profiles,
+            appearance = appearance,
+            streamDisplay = streamDisplay,
+            accent = accent,
+            language = language,
+            confirmHighRiskApproval = confirmHighRiskApproval,
+            muteForegroundNotifications = muteForegroundNotifications,
+            customRelayOrigin = customRelayOrigin,
+        )
     }
 
     @Synchronized
@@ -50,6 +65,10 @@ class ProfileStore(context: Context) {
                 "selected" to state.selectedHostId,
                 "appearance" to state.appearance.id,
                 "accent" to state.accent.id,
+                "language" to state.language.id,
+                "confirmHighRiskApproval" to state.confirmHighRiskApproval,
+                "muteForegroundNotifications" to state.muteForegroundNotifications,
+                "customRelayOrigin" to state.customRelayOrigin,
                 "streamDisplay" to state.streamDisplay.toMap(),
                 "profiles" to state.profiles.map { profile ->
                     mapOf(
@@ -76,4 +95,8 @@ data class StoredState(
     val appearance: Appearance = Appearance.System,
     val streamDisplay: StreamDisplayPrefs = StreamDisplayPrefs(),
     val accent: AccentChoice = AccentChoice.Ink,
+    val language: AppLanguage = AppLanguage.ZhHans,
+    val confirmHighRiskApproval: Boolean = true,
+    val muteForegroundNotifications: Boolean = true,
+    val customRelayOrigin: String = "",
 )

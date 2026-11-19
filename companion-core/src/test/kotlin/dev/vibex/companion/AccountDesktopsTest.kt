@@ -38,14 +38,87 @@ class AccountDesktopsTest {
     @Test
     fun skipsDeviceLoginsWithoutAHost() {
         val root = JsonValue.parse(
-     """
-     {"records": [
-  {"hostId":"session:42","hostName":"iPhone","kind":"local","lastSeenAt":"2026-11-12T11:00:00Z","configSynced":false},
-         {"hostId":"host:mac","hostName":"Mac","kind":"local","lastSeenAt":"2026-11-12T10:00:00Z","configSynced":true}
-     ]}
-     """.trimIndent(),
+            """
+            {"records": [
+                {"hostId":"session:42","hostName":"iPhone","kind":"local","lastSeenAt":"2026-11-12T11:00:00Z","configSynced":false},
+                {"hostId":"host:local-desktop","hostName":"Local Host","kind":"local","osType":"macos","osArch":"aarch64","lastSeenAt":"2026-11-12T12:00:00Z"},
+                {"hostId":"host:remote-desktop","hostName":"Local Host","kind":"local","osType":"linux","osArch":"x86_64","lastSeenAt":"2026-11-12T12:00:00Z"},
+                {"hostId":"web:browser-1","hostName":"Web","kind":"local","lastSeenAt":"2026-11-12T12:00:00Z"},
+                {"hostId":"profile:abc","hostName":"Profile","kind":"local","lastSeenAt":"2026-11-12T12:00:00Z"},
+                {"hostId":"origin:http://localhost","hostName":"Origin","kind":"local","lastSeenAt":"2026-11-12T12:00:00Z"},
+                {"hostId":"default","hostName":"Default","kind":"local","lastSeenAt":"2026-11-12T12:00:00Z"},
+                {"hostId":"localhost","hostName":"Localhost","kind":"local","lastSeenAt":"2026-11-12T12:00:00Z"},
+                {"hostId":"host:mac","hostName":"Mac","kind":"local","lastSeenAt":"2026-11-12T10:00:00Z","configSynced":true}
+            ]}
+            """.trimIndent(),
         ) as JsonValue.Object
- assertEquals(listOf("mac"), AccountDesktops.parse(root).map { it.hostId })
+        assertEquals(listOf("mac"), AccountDesktops.parse(root).map { it.hostId })
+    }
+
+    @Test
+    fun deduplicatesGenericLocalHostEntriesKeepingOnlineOrMostRecent() {
+        val staleInstall = AccountDesktop(
+            hostId = "uuid-old-vibex",
+            hostName = "Local Host",
+            osType = "macos",
+            osArch = "aarch64",
+            lastSeenAt = "2026-11-10T08:00:00Z",
+            cloudOnline = false,
+        )
+        val liveInstall = AccountDesktop(
+            hostId = "uuid-live-dimo",
+            hostName = "Local Host",
+            osType = "macos",
+            osArch = "aarch64",
+            lastSeenAt = "2026-11-11T08:00:00Z",
+            cloudOnline = true,
+        )
+        val offlineNewerGhost = AccountDesktop(
+            hostId = "uuid-ghost",
+            hostName = "Local Host",
+            osType = "macos",
+            osArch = "aarch64",
+            lastSeenAt = "2026-11-12T08:00:00Z",
+            cloudOnline = false,
+        )
+
+        val withLive = AccountDesktops.deduplicate(listOf(staleInstall, liveInstall, offlineNewerGhost))
+        assertEquals(listOf("uuid-live-dimo"), withLive.map { it.hostId })
+
+        val allOffline = AccountDesktops.deduplicate(
+            listOf(staleInstall, liveInstall.copy(cloudOnline = false), offlineNewerGhost),
+        )
+        assertEquals(listOf("uuid-ghost"), allOffline.map { it.hostId })
+
+        val allOfflineWithPaired = AccountDesktops.deduplicate(
+            desktops = listOf(staleInstall, liveInstall.copy(cloudOnline = false), offlineNewerGhost),
+            pairedHostIds = setOf("uuid-live-dimo"),
+        )
+        assertEquals(listOf("uuid-live-dimo"), allOfflineWithPaired.map { it.hostId })
+    }
+
+    @Test
+    fun displayNameMapsGenericNamesToPlatformFriendlyLabelAndPreservesCustomNames() {
+        assertEquals(
+            "Dimo 桌面端 (Mac)",
+            AccountDesktop(hostId = "h1", hostName = "Local Host", osType = "macos", osArch = "aarch64").displayName,
+        )
+        assertEquals(
+            "Dimo 桌面端 (Windows)",
+            AccountDesktop(hostId = "h2", hostName = "VibeX 电脑", osType = "windows", osArch = "x86_64").displayName,
+        )
+        assertEquals(
+            "Dimo 桌面端 (Linux)",
+            AccountDesktop(hostId = "h3", hostName = "localhost", osType = "linux", osArch = "x86_64").displayName,
+        )
+        assertEquals(
+            "Alpha",
+            AccountDesktop(hostId = "h4", hostName = "Alpha", osType = "macos", osArch = "arm64").displayName,
+        )
+        assertEquals(
+            "Studio-MacBook",
+            AccountDesktop(hostId = "h5", hostName = "Studio-MacBook.local", osType = "macos", osArch = "arm64").displayName,
+        )
     }
 
     @Test
@@ -56,9 +129,9 @@ class AccountDesktopsTest {
 
     @Test
     fun tenantOriginUsesAssignedRelayOrDefault() {
-        val fallback = "https://vibex.xforever.xin"
+        val fallback = "https://dimo-ai.com"
         assertEquals(
-            "https://vibex.xforever.xin/t/alpha",
+            "https://dimo-ai.com/t/alpha",
             AccountDesktops.tenantOrigin(AccountDesktops.relayBase(null, fallback), "host:alpha"),
         )
         assertEquals(

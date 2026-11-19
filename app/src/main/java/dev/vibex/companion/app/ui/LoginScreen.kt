@@ -106,6 +106,12 @@ fun LoginScreen(state: UiState, model: CompanionModel, onPairWithCode: () -> Uni
         Modifier
             .fillMaxSize()
             .background(colors.bg)
+            .clickable(
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = null,
+            ) {
+                focusManager.clearFocus()
+            }
             .statusBarsPadding()
             .navigationBarsPadding()
             .imePadding()
@@ -129,7 +135,7 @@ fun LoginScreen(state: UiState, model: CompanionModel, onPairWithCode: () -> Uni
         Spacer(Modifier.height(14.dp))
         Text("欢迎回来", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = colors.textPrimary)
         Spacer(Modifier.height(4.dp))
-        Text("登录你的 VibeX 账号", fontSize = 14.sp, color = colors.textSecondary)
+        Text("登录你的 Dimo 账号", fontSize = 14.sp, color = colors.textSecondary)
         Spacer(Modifier.height(24.dp))
         ModeSwitch(mode) { mode = it }
         Spacer(Modifier.height(16.dp))
