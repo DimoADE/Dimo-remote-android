@@ -475,6 +475,45 @@ class HostApi(
     }
 
 
+    /** Light `conversation_detail` read used for steering capability + current turn. */
+    fun conversationDetailLight(origin: HostOrigin, token: String, conversationId: String): JsonValue =
+        call(
+            origin,
+            token,
+            "conversation_detail",
+            mapOf("conversationId" to conversationId, "tailTurns" to 1.0),
+        )
+
+    fun rateLimitUpdateAutoResume(
+        origin: HostOrigin,
+        token: String,
+        conversationId: String,
+        autoResume: Boolean,
+        continuationPrompt: String? = null,
+    ) {
+        call(
+            origin,
+            token,
+            "conversation_rate_limit_update_auto_resume",
+            mapOf(
+                "request" to mapOf(
+                    "conversationId" to conversationId,
+                    "autoResume" to autoResume,
+                    "continuationPrompt" to continuationPrompt,
+                ),
+            ),
+        )
+    }
+
+    fun rateLimitCancelWait(origin: HostOrigin, token: String, conversationId: String) {
+        call(
+            origin,
+            token,
+            "conversation_rate_limit_cancel_wait",
+            mapOf("request" to mapOf("conversationId" to conversationId)),
+        )
+    }
+
     fun cancelConversationInput(
         origin: HostOrigin,
         token: String,
@@ -690,8 +729,15 @@ class HostApi(
         }
     }
 
-    fun collaboration(origin: HostOrigin, token: String, operation: String, input: Map<String, Any?>): JsonValue {
+    fun collaboration(
+        origin: HostOrigin,
+        token: String,
+        operation: String,
+        input: Map<String, Any?>,
+        operationId: String = UUID.randomUUID().toString(),
+    ): JsonValue {
         return call(
+            operationId = operationId,
             origin = origin,
             token = token,
             command = "collaboration_call",
@@ -961,8 +1007,13 @@ class HostApi(
         )
     }
 
-    fun call(origin: HostOrigin, token: String, command: String, args: Map<String, Any?>): JsonValue {
-        val operationId = UUID.randomUUID().toString()
+    fun call(
+        origin: HostOrigin,
+        token: String,
+        command: String,
+        args: Map<String, Any?>,
+        operationId: String = UUID.randomUUID().toString(),
+    ): JsonValue {
         val body = encodeObject(
             mapOf(
                 "operation_id" to operationId,

@@ -89,7 +89,7 @@ object SystemNotifier {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         val alertsChannel = NotificationChannel(
             CHANNEL_ALERTS,
-            "VibeX 即时通知与审批提醒",
+            "Dimo 即时通知与审批提醒",
             NotificationManager.IMPORTANCE_HIGH,
         ).apply {
             description = "会话完成、执行异常、新会话及权限审批横幅提醒"
@@ -98,7 +98,7 @@ object SystemNotifier {
         }
         val liveChannel = NotificationChannel(
             CHANNEL_LIVE,
-            "VibeX 灵动岛与实时任务进度",
+            "Dimo 灵动岛与实时任务进度",
             NotificationManager.IMPORTANCE_DEFAULT,
         ).apply {
             description = "实时同步 AI Agent 思考、代码开发、验证与完成进度"
@@ -109,7 +109,7 @@ object SystemNotifier {
         }
         val statusChannel = NotificationChannel(
             CHANNEL_STATUS,
-            "VibeX 状态通知",
+            "Dimo 状态通知",
             NotificationManager.IMPORTANCE_DEFAULT,
         ).apply {
             description = "电脑连接状态与系统提示"

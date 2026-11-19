@@ -25,11 +25,12 @@ object PairingInvitationParser {
         val trimmed = raw.trim()
         val payload = when {
             trimmed.startsWith("vibex-pairing:") -> trimmed.removePrefix("vibex-pairing:")
+            trimmed.startsWith("dimo-pairing:") -> trimmed.removePrefix("dimo-pairing:")
             trimmed.startsWith("{") -> trimmed
-            else -> throw PairingException("这不是 VibeX 邀请")
+            else -> throw PairingException("这不是 Dimo 邀请")
         }
         val root = runCatching { JsonValue.parse(payload) as JsonValue.Object }
-            .getOrElse { throw PairingException("这不是 VibeX 邀请") }
+            .getOrElse { throw PairingException("这不是 Dimo 邀请") }
         val token = root.textOrNull("pairing_token")
             ?: throw PairingException("邀请缺少 pairing token")
         if (token.startsWith("vbx_device_") || token.length > 400 && !token.startsWith("vbx_pair_")) {
@@ -49,7 +50,7 @@ object PairingInvitationParser {
     fun parseManual(origin: String, pairingToken: String): PairingInvitation {
         val raw = pairingToken.trim()
         if (raw.isEmpty()) throw PairingException("需要连接码")
-        if (raw.startsWith("vibex-pairing:") || raw.startsWith("{")) {
+        if (raw.startsWith("vibex-pairing:") || raw.startsWith("dimo-pairing:") || raw.startsWith("{")) {
             return parse(raw)
         }
         if (raw.startsWith("vbx_device_", ignoreCase = true)) {

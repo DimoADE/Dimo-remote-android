@@ -66,7 +66,7 @@ object QuestionForm {
     ): JsonValue {
         val schemaObj = request.schema?.asObject()?.value
         val hasSchemaProps = (schemaObj?.get("properties")?.asObject()?.value?.isNotEmpty() == true) ||
-            (schemaObj?.get("x-vibex-questions")?.asArray()?.value?.isNotEmpty() == true)
+            (schemaObj?.get("x-dimo-questions")?.asArray()?.value?.isNotEmpty() == true)
 
         if (!hasSchemaProps && questions.size == 1 && questions.first().id == "answer") {
             val answer = answers["answer"] ?: QuestionAnswer()
@@ -93,7 +93,7 @@ object QuestionForm {
                 payload[question.id] = JsonValue.Text(trimmed)
             } else if (answer.selected.isNotEmpty()) {
                 val first = answer.selected.first()
-                if (request.options.isNotEmpty() && schemaObj?.get("x-vibex-questions") == null) {
+                if (request.options.isNotEmpty() && schemaObj?.get("x-dimo-questions") == null) {
                     payload["option_id"] = JsonValue.Text(first)
                 }
                 payload[question.id] = JsonValue.Text(first)
@@ -104,7 +104,7 @@ object QuestionForm {
 
     fun parseQuestions(schema: JsonValue): List<FormQuestion> {
         val root = schema.asObject()?.value ?: return emptyList()
-        val vibexQuestions = root["x-vibex-questions"]?.asArray()?.value
+        val vibexQuestions = root["x-dimo-questions"]?.asArray()?.value
         if (!vibexQuestions.isNullOrEmpty()) {
             val requiredSet = root["required"]?.asArray()?.value
                 ?.mapNotNull { it.asText() }

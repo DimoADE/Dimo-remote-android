@@ -11,10 +11,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.rounded.Wifi
@@ -99,7 +102,7 @@ fun DesktopConnectDialog(
                         NoDesktopGuide(onDownload = { model.openAccountSitePath("/download") })
                     } else if (desktops.isEmpty() && unmatchedLanHosts.isEmpty()) {
                         Text(
-                            text = "同一 Wi-Fi 下暂未发现运行中的 VibeX 电脑",
+                            text = "同一 Wi-Fi 下暂未发现运行中的 Dimo 电脑",
                             fontSize = 14.sp,
                             color = colors.textSecondary,
                             textAlign = TextAlign.Center,
@@ -180,11 +183,14 @@ private fun DesktopList(
 ) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         desktops.forEach { desktop ->
+            val onSameWifi = model.lanOriginFor(desktop) != null
+            val isOnline = onSameWifi || desktop.cloudOnline
             DesktopRow(
                 desktop = desktop,
-                onSameWifi = model.lanOriginFor(desktop) != null,
+                onSameWifi = onSameWifi,
                 isSelected = desktops.size > 1 && desktop.hostId == selected?.hostId,
                 onClick = if (desktops.size > 1) ({ onSelect(desktop.hostId) }) else null,
+                onRemove = if (desktops.size > 1 && !isOnline) ({ model.removeAccountDesktop(desktop) }) else null,
             )
         }
     }
@@ -196,6 +202,7 @@ private fun DesktopRow(
     onSameWifi: Boolean,
     isSelected: Boolean,
     onClick: (() -> Unit)?,
+    onRemove: (() -> Unit)?,
 ) {
     val colors = VibexTheme.colors
     val shape = RoundedCornerShape(12.dp)
@@ -212,7 +219,7 @@ private fun DesktopRow(
     ) {
         Icon(Icons.Rounded.Computer, null, tint = colors.accent, modifier = Modifier.size(22.dp))
         Text(
-            text = desktop.hostName,
+            text = desktop.displayName,
             fontSize = 15.sp,
             fontWeight = FontWeight.SemiBold,
             color = colors.textPrimary,
@@ -237,6 +244,23 @@ private fun DesktopRow(
                     color = colors.pass,
                 )
             }
+        } else if (desktop.cloudOnline) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(colors.pass.copy(alpha = 0.14f))
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Icon(Icons.Rounded.Cloud, null, tint = colors.pass, modifier = Modifier.size(11.dp))
+                Text(
+                    text = "云端在线",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colors.pass,
+                )
+            }
         }
         desktop.platformBadge?.let {
             Text(
@@ -252,6 +276,22 @@ private fun DesktopRow(
         }
         if (isSelected) {
             Icon(Icons.Rounded.CheckCircle, null, tint = colors.accent, modifier = Modifier.size(18.dp))
+        }
+        if (onRemove != null) {
+            Box(
+                modifier = Modifier
+                    .size(24.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onRemove),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.Close,
+                    contentDescription = "移除离线电脑",
+                    tint = colors.textTertiary,
+                    modifier = Modifier.size(15.dp),
+                )
+            }
         }
     }
 }
@@ -315,7 +355,7 @@ private fun SingleTapConnectArea(
     val canConnect = lanEnabled || cloudEnabled
     val hint = when {
         lanEnabled -> "同一 Wi-Fi 自动走局域网直连"
-        cloudEnabled -> "当前通过 VibeX 云服务连接"
+        cloudEnabled -> "当前通过 Dimo 云服务连接"
         else -> "当前不在同一 Wi-Fi，且账号未开通云服务"
     }
 
@@ -428,10 +468,10 @@ private fun FailureState(message: String, onRetry: () -> Unit) {
 private fun NoDesktopGuide(onDownload: () -> Unit) {
     val colors = VibexTheme.colors
     Text(
-        text = "在电脑上安装 VibeX 并登录同一账号，即可免输码连接",
+        text = "在电脑上安装 Dimo 并登录同一账号，即可免输码连接",
         fontSize = 14.sp,
         color = colors.textSecondary,
         textAlign = TextAlign.Center,
     )
-    PrimaryButton(label = "下载 VibeX", onClick = onDownload)
+    PrimaryButton(label = "下载 Dimo", onClick = onDownload)
 }

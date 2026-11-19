@@ -27,14 +27,14 @@ class PairingCoordinatorTest {
         val error = assertFailsWith<LocalNetworkUnreachableException> {
             coordinator(offline).redeemInvitation(invitation("http://192.168.1.5:17891", "http://10.0.0.8:17891"), "Pixel")
         }
-        assertEquals("电脑未开启云服务。请连接与电脑相同的 Wi-Fi，或在电脑上登录 VibeX 账号", error.message)
+        assertEquals("电脑未开启云服务。请连接与电脑相同的 Wi-Fi，或在电脑上登录 Dimo 账号", error.message)
     }
 
     @Test
     fun unreachableCloudOriginKeepsTheGenericFailure() {
         val error = assertFailsWith<IOException> {
             coordinator(offline).redeemInvitation(
-                invitation("http://192.168.1.5:17891", "https://vibex.xforever.xin/t/host-1"),
+                invitation("http://192.168.1.5:17891", "https://dimo-ai.com/t/host-1"),
                 "Pixel",
             )
         }
@@ -64,7 +64,7 @@ class PairingCoordinatorTest {
         )
         local.forEach { assertTrue(HostOrigin.parse(it).isLocalNetwork, it) }
         val public = listOf(
-            "https://vibex.xforever.xin/t/host-1",
+            "https://dimo-ai.com/t/host-1",
             "http://172.32.0.4:17891",
             "http://100.101.1.2:17891",
             "http://203.0.113.9:17891",

@@ -432,7 +432,7 @@ class AppUpdateManager private constructor(private val appContext: Context) {
                     "版本更新提醒",
                     NotificationManager.IMPORTANCE_HIGH,
                 ).apply {
-                    description = "当 VibeX 发布新版本时推送更新日志与一键安装提醒"
+                    description = "当 Dimo 发布新版本时推送更新日志与一键安装提醒"
                 },
             )
         }
@@ -470,7 +470,7 @@ class AppUpdateManager private constructor(private val appContext: Context) {
 
         val notification = NotificationCompat.Builder(appContext, UPDATE_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher_round)
-            .setContentTitle("发现 VibeX 新版本 v${release.version}")
+            .setContentTitle("发现 Dimo 新版本 v${release.version}")
             .setContentText(summary.lines().first())
             .setStyle(NotificationCompat.BigTextStyle().bigText(summary))
             .setPriority(NotificationCompat.PRIORITY_HIGH)

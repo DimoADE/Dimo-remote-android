@@ -112,7 +112,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         val raw = intent?.getStringExtra("pairing_invitation")?.takeIf { it.isNotBlank() }
-            ?: intent?.dataString?.takeIf { it.startsWith("vibex-pairing:", ignoreCase = true) }
+            ?: intent?.dataString?.takeIf { it.startsWith("vibex-pairing:", ignoreCase = true) || it.startsWith("dimo-pairing:", ignoreCase = true) }
             ?: return
         intent?.removeExtra("pairing_invitation")
         model.pairFromRaw(raw)

@@ -123,7 +123,7 @@ fun CompanionRefresh(
 @Composable
 fun BrandMark(size: Dp = 72.dp) {
     val res = if (VibexTheme.colors.isDark) R.drawable.logo_dark else R.drawable.logo_light
-    Image(painterResource(res), "VibeX", Modifier.size(size))
+    Image(painterResource(res), "Dimo", Modifier.size(size))
 }
 
 @Composable

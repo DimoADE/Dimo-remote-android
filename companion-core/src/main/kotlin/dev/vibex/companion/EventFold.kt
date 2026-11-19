@@ -76,6 +76,7 @@ object EventFold {
         if (order.isEmpty()) return
 
         val transcriptRows = mutableListOf<TimelineRow>()
+        var pendingRateLimit: RateLimitBanner? = null
         val totalRows = order.size
         order.forEachIndexed { rowIndex, rowId ->
             val obj = deduped[rowId]?.second ?: return@forEachIndexed
@@ -125,6 +126,10 @@ object EventFold {
                     val err = inner.objOrNull("error")
                     val msg = err?.objOrNull("error")?.textAny("message")
                         ?: err?.textAny("message").orEmpty()
+                    val errBody = err?.objOrNull("error") ?: err
+                    if (errBody?.textAny("kind") == "rate_limited") {
+                        pendingRateLimit = parseRateLimit(errBody, "tx:err:$rowId", session.agentId)
+                    }
                     if (msg.isNotBlank()) {
                         transcriptRows += TimelineRow(
                             id = "tx:err:$rowId",
@@ -133,6 +138,11 @@ object EventFold {
                             body = msg,
                             tone = TimelineTone.Stop,
                         )
+                    }
+                }
+                "session_notice" -> {
+                    parseHandoffNotice(inner.objOrNull("notice"), "tx:handoff:$rowId")?.let {
+                        transcriptRows += it
                     }
                 }
                 "message_turn" -> {
@@ -308,6 +318,13 @@ object EventFold {
                     }
                 }
             }
+        }
+
+        // A rate-limit banner only stays while no later user message follows the error.
+        session.rateLimit = pendingRateLimit?.takeIf { banner ->
+            val errIdx = transcriptRows.indexOfFirst { it.id == banner.rowId }
+            val lastUserIdx = transcriptRows.indexOfLast { it.kind == "user" }
+            errIdx < 0 || lastUserIdx < errIdx
         }
 
         if (transcriptRows.isEmpty()) return
@@ -685,6 +702,7 @@ object EventFold {
                 )
             }
             "turn_completed" -> {
+                session.rateLimit = null
                 session.inFlightTurnId = null
                 session.optimisticThinkingUntilMs = 0L
                 session.permissionPrompt = null
@@ -692,13 +710,19 @@ object EventFold {
                 session.notices.removeAll { it.id.startsWith("end:") }
                 session.rows.removeAll { it.kind == "turn_cancelled" }
             }
-            "turn_failed" -> finishTurn(
+            "turn_failed" -> {
+                val liveErr = payload?.objOrNull("error")
+                if (liveErr?.textAny("kind") == "rate_limited") {
+                    session.rateLimit = parseRateLimit(liveErr, "end:${event.sequence}", session.agentId)
+                }
+                finishTurn(
                 session,
                 event,
                 "失败",
                 TimelineTone.Stop,
                 payload.nestedText("error", "message") ?: payload.textOrEmpty("message"),
-            )
+                )
+            }
             "turn_cancelled" -> finishTurn(session, event, "已取消", TimelineTone.Quiet)
             "turn_interrupted" -> finishTurn(
                 session,
@@ -720,8 +744,7 @@ object EventFold {
             }
             "prompt_capabilities_updated" -> {
                 val caps = payload?.objOrNull("capabilities") ?: payload
-                session.canSteer = caps?.boolOrNull("steer") == true ||
-                    caps?.value?.containsKey("steering") == true
+                applySteeringCapabilities(session, caps)
             }
             "available_commands_updated" -> {
                 session.availableCommands.clear()
@@ -954,6 +977,85 @@ object EventFold {
             }
         }
         session.rows.removeAll { it.id.startsWith("blocked:") }
+    }
+
+    /** Honest steering: only a native-capable binding steers; host reports it via `conversation_detail`. */
+    fun applySteeringCapabilities(session: TimelineSession, caps: JsonValue.Object?) {
+        if (caps == null) return
+        val steering = caps.boolOrNull("steering") == true || caps.boolOrNull("steer") == true
+        val channel = caps.textAny("delivery_channel", "deliveryChannel")
+        val hasSignal = caps.value.containsKey("steering") || caps.value.containsKey("steer") || channel.isNotBlank()
+        if (!hasSignal) return
+        session.canSteer = steering
+        session.steeringKnown = true
+    }
+
+    /** Applies `conversation_detail` (tailTurns=1) steering capability and in-flight turn id. */
+    fun applyConversationDetail(session: TimelineSession, payload: JsonValue?) {
+        val root = unwrapObject(payload) ?: return
+        val binding = root.objOrNull("active_binding") ?: root.objOrNull("activeBinding")
+        val caps = binding?.objOrNull("capabilities")
+        if (caps != null) {
+            applySteeringCapabilities(session, caps)
+            if (!session.steeringKnown) {
+                session.canSteer = false
+                session.steeringKnown = true
+            }
+        } else if (binding == null) {
+            session.canSteer = false
+            session.steeringKnown = true
+        }
+    }
+
+    private fun parseRateLimit(err: JsonValue.Object, rowId: String, agentId: String): RateLimitBanner {
+        val raw = err.objOrNull("raw")
+        val planWindows = (err.objOrNull("plan_usage") ?: err.objOrNull("planUsage"))
+            ?.arrOrNull("windows").orEmpty()
+        val resetFromPlan = planWindows.mapNotNull { it.asObject()?.longOrNull("resetsAtMs") }.minOrNull()
+        val resetFromRaw = raw?.let { r ->
+            (r.longOrNull("reset_at") ?: r.longOrNull("resetAt") ?: r.longOrNull("resets_at") ?: r.longOrNull("resetsAt"))
+                ?.let { if (it < 1_000_000_000_000L) it * 1000 else it }
+        }
+        val retry = raw?.longOrNull("retry_after_seconds") ?: raw?.longOrNull("retryAfterSeconds")
+        return RateLimitBanner(
+            rowId = rowId,
+            engine = agentId,
+            resetAtMs = resetFromPlan ?: resetFromRaw,
+            retryAfterSeconds = retry?.takeIf { it > 0 },
+            message = err.textAny("message"),
+        )
+    }
+
+    private fun parseHandoffNotice(notice: JsonValue.Object?, rowId: String): TimelineRow? {
+        notice ?: return null
+        val announcement = notice.textAny("announcement_id", "announcementId")
+        if (!announcement.startsWith("host-note:agent-handoff")) return null
+        val structured = runCatching { JsonValue.parse(notice.textAny("message")) as? JsonValue.Object }.getOrNull()
+            ?: return null
+        val from = structured.textAny("fromAgent")
+        val to = structured.textAny("toAgent")
+        if (from.isBlank() || to.isBlank()) return null
+        val fork = structured.textAny("handoffKind") == "fork"
+        val fromModel = structured.textAny("fromModel")
+        val toModel = structured.textAny("toModel")
+        val tokens = structured.longOrNull("handoffTokens")
+        val label = buildString {
+            append(if (fork) "Fork 交接" else "交接")
+            append(" · ")
+            append(from)
+            if (fromModel.isNotBlank()) append(" ($fromModel)")
+            append(" → ")
+            append(to)
+            if (toModel.isNotBlank()) append(" ($toModel)")
+            if (tokens != null && tokens > 0) append(" · 约 $tokens tokens")
+        }
+        return TimelineRow(
+            id = rowId,
+            kind = "agent_handoff",
+            title = "交接",
+            body = label,
+            tone = TimelineTone.Quiet,
+        )
     }
 
     private fun finishTurn(

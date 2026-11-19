@@ -130,7 +130,7 @@ fun NewThreadScreen(
     val currentProject = remember(projects, selectedProjectId, state.selectedProjectId) {
         val targetId = selectedProjectId ?: state.selectedProjectId
         projects.find { targetId != null && it.id.equals(targetId, ignoreCase = true) }
-            ?: projects.firstOrNull { !it.path.endsWith("/.vibex") }
+            ?: projects.firstOrNull { !it.path.endsWith("/.vibex") && !it.path.endsWith("/.dimo") }
             ?: projects.firstOrNull()
     }
 
@@ -224,7 +224,7 @@ fun NewThreadScreen(
         ?: state.conversations.firstOrNull { it.workspaceId.isNotBlank() }?.workspaceId
 
     val activeHostName = remember(state.profiles, state.selectedHostId) {
-        state.profiles.find { it.hostId == state.selectedHostId }?.name?.ifBlank { null } ?: "VibeX 桌面端"
+        state.profiles.find { it.hostId == state.selectedHostId }?.name?.ifBlank { null } ?: "Dimo 桌面端"
     }
 
     val branchLabel = remember(currentWorkspace) {

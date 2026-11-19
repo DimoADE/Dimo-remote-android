@@ -68,7 +68,7 @@ fun PairingCodeScreen(
     val clipboard = LocalClipboardManager.current
     var code by remember { mutableStateOf("") }
     val trimmedCode = code.trim()
-    val isInvitation = trimmedCode.startsWith("vibex-pairing:") || trimmedCode.startsWith("{")
+    val isInvitation = trimmedCode.startsWith("vibex-pairing:") || trimmedCode.startsWith("dimo-pairing:") || trimmedCode.startsWith("{")
     val canSubmit = !state.pairing && trimmedCode.isNotEmpty()
     val lanHosts = remember(state.discoveredHosts) { state.discoveredHosts.filter { !it.isCloudService } }
 
@@ -364,7 +364,7 @@ fun PairingCodeScreen(
                                     val pasted = clipboard.getText()?.text.orEmpty().trim()
                                     if (pasted.isNotEmpty()) {
                                         code = pasted
-                                        if (pasted.startsWith("vibex-pairing:") || pasted.startsWith("{")) {
+                                        if (pasted.startsWith("vibex-pairing:") || pasted.startsWith("dimo-pairing:") || pasted.startsWith("{")) {
                                             model.pairFromRaw(pasted)
                                         }
                                     }

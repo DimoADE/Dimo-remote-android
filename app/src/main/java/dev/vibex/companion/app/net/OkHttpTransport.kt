@@ -3,7 +3,7 @@ package dev.vibex.companion.app.net
 import dev.vibex.companion.E2eeSessionManager
 import dev.vibex.companion.HttpExchange
 import dev.vibex.companion.HttpTransport
-import dev.vibex.companion.PairingClient
+import dev.vibex.companion.requestReadTimeoutMs
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -31,17 +31,20 @@ object TcpNoDelaySocketFactory : SocketFactory() {
 class OkHttpTransport(
     private val client: OkHttpClient = OkHttpClient.Builder()
         .socketFactory(TcpNoDelaySocketFactory)
-        .connectTimeout(5, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .build(),
 ) : HttpTransport {
     private val fastLanClient: OkHttpClient = client.newBuilder()
-        .connectTimeout(900, TimeUnit.MILLISECONDS)
+        .connectTimeout(1_500, TimeUnit.MILLISECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
     private fun isLocalOrPrivateLan(url: String): Boolean {
         val lower = url.lowercase()
+        if (lower.contains("/t/")) return false
         return lower.startsWith("http://127.") ||
+            lower.startsWith("http://10.0.2.2") ||
             lower.startsWith("http://localhost") ||
             lower.startsWith("http://192.168.") ||
             lower.startsWith("http://10.") ||
@@ -49,9 +52,11 @@ class OkHttpTransport(
     }
 
     override fun execute(method: String, url: String, headers: Map<String, String>, body: String?): HttpExchange {
+        val hadActiveE2ee = E2eeSessionManager.isE2eeActive(url)
         val first = executeOnce(method, url, headers, body, allowBootstrap = true)
-        if (first.status == 412) {
-            return executeOnce(method, url, headers, body, allowBootstrap = false)
+        if (first.status == 412 || (first.status == 401 && hadActiveE2ee)) {
+            E2eeSessionManager.clearSession(url)
+            return executeOnce(method, url, headers, body, allowBootstrap = true)
         }
         return first
     }
@@ -73,7 +78,11 @@ class OkHttpTransport(
                     .header(E2eeSessionManager.HEADER_CLIENT_PUB, E2eeSessionManager.clientPublicKeyBase64)
                     .get()
                     .build()
-                (if (isPrivateLan) fastLanClient else client).newCall(hsReq).execute().use { hsResp ->
+                val hsClient = (if (isPrivateLan) fastLanClient else client)
+                    .newBuilder()
+                    .readTimeout(if (isPrivateLan) 3_000L else 8_000L, TimeUnit.MILLISECONDS)
+                    .build()
+                hsClient.newCall(hsReq).execute().use { hsResp ->
                     E2eeSessionManager.ingestHandshake(
                         originKey,
                         hsResp.header(E2eeSessionManager.HEADER_SESSION),
@@ -125,7 +134,11 @@ class OkHttpTransport(
         if (method == "DELETE" && wireBody != null) {
             builder.method("DELETE", wireBody!!.toRequestBody(media))
         }
-        val activeClient = if (isPrivateLan) fastLanClient else client
+        val readTimeoutMs = requestReadTimeoutMs(method, isPrivateLan).toLong()
+        val activeClient = (if (isPrivateLan) fastLanClient else client)
+            .newBuilder()
+            .readTimeout(readTimeoutMs, TimeUnit.MILLISECONDS)
+            .build()
         activeClient.newCall(builder.build()).execute().use { response ->
             val updatedSession = E2eeSessionManager.ingestHandshake(
                 originKey,

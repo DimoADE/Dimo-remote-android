@@ -6,6 +6,7 @@ import dev.vibex.companion.AccountAuthRequests
 import dev.vibex.companion.AccountDesktop
 import dev.vibex.companion.AccountDesktops
 import dev.vibex.companion.AssignedRelayServer
+import dev.vibex.companion.PairingClient
 import dev.vibex.companion.asArray
 import dev.vibex.companion.asBool
 import dev.vibex.companion.asNumber
@@ -14,6 +15,9 @@ import dev.vibex.companion.asText
 import dev.vibex.companion.encodeObject
 import dev.vibex.remote.v1.JsonValue
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.Cookie
@@ -39,12 +43,12 @@ data class VibeXAccountUser(
     val resolvedDisplayName: String
         get() = displayName.trim().ifEmpty {
             username.trim().ifEmpty {
-                email.substringBefore("@").trim().ifEmpty { "VibeX User" }
+                email.substringBefore("@").trim().ifEmpty { "Dimo User" }
             }
         }
 
     val avatarInitial: String
-        get() = resolvedDisplayName.firstOrNull()?.uppercaseChar()?.toString() ?: "V"
+        get() = resolvedDisplayName.firstOrNull()?.uppercaseChar()?.toString() ?: "D"
 
     val accountIdentifier: String
         get() = username.trim().ifEmpty { email.trim() }
@@ -120,11 +124,11 @@ data class VibeXAccountOverview(
 
     val planDisplayName: String
         get() = when (user.tier) {
-            "subscriber" -> "VibeX 订阅会员"
-            "sponsor" -> "VibeX 赞助会员"
-            "beta" -> "VibeX Beta 计划"
-            "admin" -> "VibeX 管理员"
-            else -> if (hasActiveCreditsOrTier) "按量付费 · 已激活" else "VibeX 免费版"
+            "subscriber" -> "Dimo 订阅会员"
+            "sponsor" -> "Dimo 赞助会员"
+            "beta" -> "Dimo Beta 计划"
+            "admin" -> "Dimo 管理员"
+            else -> if (hasActiveCreditsOrTier) "按量付费 · 已激活" else "Dimo 免费版"
         }
 }
 
@@ -157,7 +161,13 @@ class VibeXAccountException(
 
 class VibeXAccountRepository(context: Context) {
     companion object {
-        const val SITE_BASE_URL = "https://vibex.xforever.xin"
+        val SITE_BASE_URL: String =
+            (System.getenv("DIMO_SITE_URL") ?: System.getenv("VIBEX_SITE_URL"))
+                ?.trim()
+                ?.trimEnd('/')
+                ?.takeIf { it.isNotEmpty() }
+                ?: "https://dimo-ai.com"
+        val DEFAULT_OFFICIAL_RELAY_BASE: String = PairingClient.DEFAULT_OFFICIAL_RELAY_BASE
         const val PRIVACY_PATH = "/docs/privacy"
         const val LOGIN_CODE_COOLDOWN_SECONDS = 60
         private const val PREF_TOKEN_KEY = "vibex.account.token"
@@ -183,6 +193,11 @@ class VibeXAccountRepository(context: Context) {
         .connectTimeout(12, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .writeTimeout(15, TimeUnit.SECONDS)
+        .build()
+    private val relayProbeHttp = http.newBuilder()
+        .connectTimeout(1_500, TimeUnit.MILLISECONDS)
+        .readTimeout(1_500, TimeUnit.MILLISECONDS)
+        .callTimeout(2_500, TimeUnit.MILLISECONDS)
         .build()
 
     fun getToken(): String? = prefs.getString(PREF_TOKEN_KEY, null)?.trim()?.takeIf { it.isNotEmpty() }
@@ -233,7 +248,7 @@ class VibeXAccountRepository(context: Context) {
     }
 
     private fun startDeviceLogin(client: OkHttpClient): VibeXDeviceLogin {
-        val deviceName = "${Build.MANUFACTURER} ${Build.MODEL}".trim().ifEmpty { "VibeX Android" }
+        val deviceName = "${Build.MANUFACTURER} ${Build.MODEL}".trim().ifEmpty { "Dimo Android" }
         val body = AccountAuthRequests.deviceStart(deviceName)
         val obj = requestObject("/api/auth/desktop/start", "POST", body, token = null, client = client)
         return VibeXDeviceLogin(
@@ -342,9 +357,61 @@ class VibeXAccountRepository(context: Context) {
         )
     }
 
-    suspend fun fetchDesktops(): List<AccountDesktop> = withContext(Dispatchers.IO) {
+    suspend fun probeRelayHostOnline(relayBase: String, hostId: String): Boolean = withContext(Dispatchers.IO) {
+        val cleanBase = relayBase.trim()
+        val rawId = AccountDesktops.rawHostId(hostId)
+        if (cleanBase.isEmpty() || rawId.isEmpty() || AccountDesktops.isPlaceholderHostId(rawId)) {
+            return@withContext false
+        }
+        val url = "${AccountDesktops.tenantOrigin(cleanBase, rawId)}/health"
+        runCatching {
+            val request = Request.Builder().url(url).get().build()
+            relayProbeHttp.newCall(request).execute().use { resp ->
+                resp.code in 200..299
+            }
+        }.getOrDefault(false)
+    }
+
+    suspend fun fetchProbedDesktops(relayBase: String? = null): List<AccountDesktop> = withContext(Dispatchers.IO) {
         val token = getToken() ?: throw VibeXAccountException("signed_out")
-        AccountDesktops.parse(requestObject("/api/account/desktop/host-configs", "GET", null, token = token))
+        val parsed = AccountDesktops.parse(requestObject("/api/account/desktop/host-configs", "GET", null, token = token))
+        val cleanRelay = relayBase?.trim().orEmpty()
+        if (cleanRelay.isEmpty() || parsed.isEmpty()) {
+            parsed
+        } else {
+            coroutineScope {
+                parsed.map { desktop ->
+                    async {
+                        desktop.copy(cloudOnline = probeRelayHostOnline(cleanRelay, desktop.hostId))
+                    }
+                }.awaitAll()
+            }
+        }
+    }
+
+    suspend fun fetchDesktops(
+        relayBase: String? = null,
+        onlineLanHostIds: Set<String> = emptySet(),
+        pairedHostIds: Set<String> = emptySet(),
+    ): List<AccountDesktop> = withContext(Dispatchers.IO) {
+        val probed = fetchProbedDesktops(relayBase)
+        AccountDesktops.deduplicate(
+            desktops = probed,
+            onlineLanHostIds = onlineLanHostIds,
+            pairedHostIds = pairedHostIds,
+        )
+    }
+
+    suspend fun deleteHostConfig(hostId: String) = withContext(Dispatchers.IO) {
+        val rawId = AccountDesktops.rawHostId(hostId)
+        if (rawId.isEmpty()) return@withContext
+        for (candidate in listOf("host:$rawId", rawId).distinct()) {
+            val token = getToken() ?: return@withContext
+            val body = encodeObject(mapOf("hostId" to candidate))
+            runCatching {
+                requestObject("/api/account/desktop/host-configs", "DELETE", body, token = token)
+            }
+        }
     }
 
     suspend fun fetchSavedHosts(): List<VibeXSyncableHostProfile> = withContext(Dispatchers.IO) {
@@ -409,7 +476,7 @@ class VibeXAccountRepository(context: Context) {
                 syncKey = o.value["syncKey"]?.asText()?.trim().orEmpty(),
                 profileId = profileId.ifEmpty { origin },
                 hostId = o.value["hostId"]?.asText()?.trim().orEmpty(),
-                name = o.value["name"]?.asText()?.trim().orEmpty().ifEmpty { "VibeX 电脑" },
+                name = o.value["name"]?.asText()?.trim().orEmpty().ifEmpty { "Dimo 电脑" },
                 origin = origin,
                 provisionKind = o.value["provisionKind"]?.asText()?.trim().orEmpty().ifEmpty { "http" },
                 deviceId = cred?.value?.get("deviceId")?.asText()?.trim().orEmpty(),

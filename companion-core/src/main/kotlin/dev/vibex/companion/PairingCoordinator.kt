@@ -10,7 +10,7 @@ data class PairingResult(
 
 /** Every invitation origin is on the computer's LAN and none answered, e.g. the phone is on cellular data. */
 class LocalNetworkUnreachableException :
-    RuntimeException("电脑未开启云服务。请连接与电脑相同的 Wi-Fi，或在电脑上登录 VibeX 账号")
+    RuntimeException("电脑未开启云服务。请连接与电脑相同的 Wi-Fi，或在电脑上登录 Dimo 账号")
 
 class PairingCoordinator(
     private val client: PairingClient = PairingClient(),

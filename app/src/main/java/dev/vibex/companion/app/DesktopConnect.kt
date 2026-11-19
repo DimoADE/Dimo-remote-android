@@ -20,7 +20,7 @@ sealed interface DesktopConnectTarget {
 
     val displayName: String
         get() = when (this) {
-            is Account -> desktop.hostName
+            is Account -> desktop.displayName
             is Lan -> host.displayName
         }
 
@@ -72,8 +72,8 @@ private const val HOST_UNREACHABLE = "无法连接到电脑，请确认电脑端
 internal fun desktopConnectErrorMessage(error: Throwable): String =
     when (error) {
         is AccountLinkException -> when (error.failure) {
-            AccountLinkFailure.AccountMismatch -> "这台电脑登录的是其他 VibeX 账号"
-            AccountLinkFailure.HostAccountSignedOut -> "这台电脑未登录 VibeX 账号"
+            AccountLinkFailure.AccountMismatch -> "这台电脑登录的是其他 Dimo 账号"
+            AccountLinkFailure.HostAccountSignedOut -> "这台电脑未登录 Dimo 账号"
             AccountLinkFailure.AccountTokenInvalid,
             AccountLinkFailure.VerificationUnavailable,
             -> ACCOUNT_VERIFICATION_UNAVAILABLE

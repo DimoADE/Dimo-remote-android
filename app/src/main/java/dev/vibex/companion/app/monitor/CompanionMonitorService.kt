@@ -64,7 +64,7 @@ class CompanionMonitorService : Service() {
         val manager = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26) {
             manager.createNotificationChannel(
-                NotificationChannel(CHANNEL, "VibeX 后台实时同步", NotificationManager.IMPORTANCE_LOW).apply {
+                NotificationChannel(CHANNEL, "Dimo 后台实时同步", NotificationManager.IMPORTANCE_LOW).apply {
                     description = "保持后台连接以驱动系统灵动岛与即时通知"
                     setShowBadge(false)
                 },
@@ -80,7 +80,7 @@ class CompanionMonitorService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL)
-            .setContentTitle("VibeX 后台守护中")
+            .setContentTitle("Dimo 后台守护中")
             .setContentText("正在实时同步 AI 任务进度与通知")
             .setSmallIcon(R.mipmap.ic_launcher_round)
             .setOngoing(true)

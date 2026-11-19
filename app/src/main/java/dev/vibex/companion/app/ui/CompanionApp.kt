@@ -140,7 +140,7 @@ private fun CompanionShell(state: UiState, model: CompanionModel) {
     )
 
     state.pendingCloudFallbackOrigin?.let {
-        val hostName = state.pendingCloudFallbackHostName ?: "VibeX 桌面端"
+        val hostName = state.pendingCloudFallbackHostName ?: "Dimo 桌面端"
         AlertDialog(
             onDismissRequest = { model.cancelSwitchToCloudFallback() },
             containerColor = colors.card,
@@ -154,7 +154,7 @@ private fun CompanionShell(state: UiState, model: CompanionModel) {
             },
             text = {
                 Text(
-                    "当前与电脑「$hostName」的局域网直连已断开，但检测到可通过「VibeX 云服务 · Beta」继续连接。是否切换至云服务？",
+                    "当前与电脑「$hostName」的局域网直连已断开，但检测到可通过「Dimo 云中继」继续连接。是否切换至云服务？",
                     fontSize = 14.sp,
                     color = colors.textSecondary,
                 )

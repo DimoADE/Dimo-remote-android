@@ -169,6 +169,9 @@ fun TimelinePane(
     var showDiff by remember { mutableStateOf(false) }
     var diffTarget by remember { mutableStateOf<FileChangeItem?>(null) }
     var showSessionSheet by remember { mutableStateOf(false) }
+    var showMoreMenu by remember { mutableStateOf(false) }
+    var showHandoff by remember { mutableStateOf(false) }
+    var showSideChat by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
     var pinnedToBottom by remember(conversationId) { mutableStateOf(true) }
@@ -300,6 +303,40 @@ fun TimelinePane(
                 onOpenDiff = { showDiff = true },
                 onOpenFiles = { showFiles = true },
             )
+
+            Box {
+                Text(
+                    text = "⋯",
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable { showMoreMenu = true }
+                        .padding(horizontal = 8.dp),
+                )
+                androidx.compose.material3.DropdownMenu(
+                    expanded = showMoreMenu,
+                    onDismissRequest = { showMoreMenu = false },
+                ) {
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = { Text("切换引擎…") },
+                        enabled = state.connection.allowsWrites && !isTurnRunning,
+                        onClick = {
+                            showMoreMenu = false
+                            model.openHandoff(conversationId)
+                            showHandoff = true
+                        },
+                    )
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = { Text("旁路对话") },
+                        onClick = {
+                            showMoreMenu = false
+                            showSideChat = true
+                        },
+                    )
+                }
+            }
         }
 
         // Session Notices
@@ -308,6 +345,16 @@ fun TimelinePane(
                 notice = item,
                 onDismiss = { model.dismissSessionNotice(conversationId, item.id) },
                 onAction = { if (item.action == "retry") model.retryInterrupted(conversationId) },
+            )
+        }
+
+        view?.rateLimit?.let { limit ->
+            RateLimitRecoveryBanner(
+                banner = limit,
+                agentId = agentId,
+                writable = state.connection.allowsWrites,
+                onAutoResume = { model.setRateLimitAutoResume(conversationId, true) },
+                onCancelWait = { model.cancelRateLimitWait(conversationId) },
             )
         }
 
@@ -447,6 +494,10 @@ fun TimelinePane(
             )
         }
 
+        if (isTurnRunning) {
+            SteeringHint(canSteer = view?.canSteer == true, known = view?.steeringKnown == true)
+        }
+
         // Unified Single-Capsule PromptBar (`PromptBar.kt`)
         PromptBar(
             conversationKey = conversationId,
@@ -465,7 +516,11 @@ fun TimelinePane(
             onSubmit = { text ->
                 pinnedToBottom = true
                 unreadUpdates = 0
-                model.send(conversationId, text)
+                if (isTurnRunning && view?.canSteer == true) {
+                    model.steer(conversationId, text)
+                } else {
+                    model.send(conversationId, text)
+                }
             },
             onStop = { model.cancel(conversationId) },
             onSelectAgentAndModel = { _, key, value ->
@@ -513,6 +568,24 @@ fun TimelinePane(
         )
     }
 
+    if (showHandoff) {
+        dev.vibex.companion.app.ui.timeline.EngineHandoffSheet(
+            state = state,
+            currentAgentId = agentId,
+            model = model,
+            onDismiss = { showHandoff = false },
+        )
+    }
+
+    if (showSideChat) {
+        dev.vibex.companion.app.ui.timeline.SideChatSheet(
+            conversationId = conversationId,
+            items = items,
+            model = model,
+            onDismiss = { showSideChat = false },
+        )
+    }
+
     if (showSessionSheet) {
         SessionInfoSheet(
             state = state,
@@ -536,6 +609,7 @@ fun MessageRow(
     val colors = VibexTheme.colors
 
     when (item.role) {
+        TimelineItem.Role.Divider -> HandoffDivider(item.text)
         TimelineItem.Role.User -> {
             Row(
                 modifier = Modifier.fillMaxWidth(),

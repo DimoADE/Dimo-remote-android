@@ -57,6 +57,7 @@ import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.MarkChatRead
 import androidx.compose.material.icons.outlined.MarkChatUnread
 import androidx.compose.material.icons.outlined.MoreHoriz
+import androidx.compose.material.icons.outlined.OpenInFull
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.PersonRemove
@@ -132,6 +133,9 @@ import dev.vibex.companion.CollabSpaceSummary
 import dev.vibex.companion.CollabTeam
 import dev.vibex.companion.SubagentRoleItem
 import dev.vibex.companion.agentDisplayName
+import dev.vibex.companion.collabMessagePreviewText
+import dev.vibex.companion.lookupCollabReplyMessage
+import dev.vibex.companion.parseCollabStructuredMessage
 import dev.vibex.companion.app.CompanionModel
 import dev.vibex.companion.app.UiState
 import dev.vibex.companion.app.ui.theme.VibexTheme
@@ -1236,7 +1240,7 @@ private fun CollabContactRow(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    val previewText = item.lastMessage?.preview
+                    val previewText = item.lastMessage?.preview?.let(::collabMessagePreviewText)?.ifBlank { null }
                         ?: if (item.isGroup) "点击进入群聊" else "点击发起私聊"
                     Text(
                         text = previewText,
@@ -1403,25 +1407,34 @@ private fun CollaborationChatView(
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
     val listState = rememberLazyListState()
-
     val spaceId = item.targetSpaceId
 
-    var messages by remember { mutableStateOf<List<CollabSpaceMessage>>(emptyList()) }
-    var scheduled by remember { mutableStateOf<List<CollabScheduledMessage>>(emptyList()) }
-    var cards by remember { mutableStateOf<List<CollabCard>>(emptyList()) }
-    var spaceMembers by remember { mutableStateOf<List<CollabSpaceMember>>(emptyList()) }
+    val (conv, messageLookup) = rememberCollabConversationController(
+        spaceId = spaceId,
+        threadId = item.threadId,
+        isGroup = item.isGroup,
+        model = model,
+        listState = listState,
+    )
+    val messages = conv.messages
+    val scheduled = conv.scheduled
+    val cards = conv.cards
+    val spaceMembers = conv.spaceMembers
+    val cardsById = remember(cards) { cards.associateBy { it.id } }
 
-    var inputText by remember { mutableStateOf("") }
-    var selectedTargets by remember { mutableStateOf<List<String>>(emptyList()) }
-    var replyingTo by remember { mutableStateOf<CollabSpaceMessage?>(null) }
-    var delaySeconds by remember { mutableIntStateOf(0) }
+    var showExpandedComposer by remember(spaceId) { mutableStateOf(false) }
+    var inputValue by remember(spaceId) { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue("")) }
+    val inputText = inputValue.text
+    var sendError by remember(spaceId) { mutableStateOf<String?>(null) }
+    var pendingOperationId by remember(spaceId) { mutableStateOf<String?>(null) }
+    var selectedTargets by remember(spaceId) { mutableStateOf<List<String>>(emptyList()) }
+    var replyingTo by remember(spaceId) { mutableStateOf<CollabSpaceMessage?>(null) }
+    var delaySeconds by remember(spaceId) { mutableIntStateOf(0) }
     var showDelayMenu by remember { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
-    var loading by remember { mutableStateOf(true) }
     var showDetailSheet by remember { mutableStateOf(false) }
     var headerReactionTrigger by remember { mutableIntStateOf(0) }
-
-    val questionDrafts = remember { mutableStateMapOf<String, String>() }
+    val questionDrafts = remember(spaceId) { mutableStateMapOf<String, String>() }
 
     val agentMembers = remember(spaceMembers, item) {
         if (item.isGroup) {
@@ -1446,38 +1459,7 @@ private fun CollaborationChatView(
     }
 
     val isChatActive = remember(messages) {
-        messages.any { it.streaming } ||
-            messages.any { m -> m.receipts.any { it.isProcessing } }
-    }
-
-    fun loadChatState(silent: Boolean = false) {
-        scope.launch {
-            if (!silent && messages.isEmpty()) loading = true
-            runCatching {
-                model.fetchCollabChatState(spaceId, item.isGroup)
-            }.onSuccess { (page, members) ->
-                val prevCount = messages.size
-                messages = page.messages
-                scheduled = page.scheduled
-                cards = page.cards
-                if (item.isGroup) spaceMembers = members
-                page.messages.lastOrNull()?.seq?.let { lastSeq ->
-                    runCatching { model.markCollabThreadRead(item.threadId, lastSeq, true) }
-                }
-                if (page.messages.size > prevCount && page.messages.isNotEmpty()) {
-                    runCatching { listState.animateScrollToItem(page.messages.lastIndex) }
-                }
-            }
-            loading = false
-        }
-    }
-
-    LaunchedEffect(spaceId) {
-        loadChatState(silent = false)
-        while (isActive) {
-            delay(2_500L)
-            loadChatState(silent = true)
-        }
+        messages.any { it.streaming } || messages.any { m -> m.receipts.any { it.isProcessing } }
     }
 
     fun memberAvatarConfig(sender: String, isSystem: Boolean): CollabBotAvatarConfig {
@@ -1522,25 +1504,46 @@ private fun CollaborationChatView(
         val text = inputText.trim()
         if (text.isEmpty() || sending) return
         sending = true
+        sendError = null
         val targets = selectedTargets
-        val replyId = replyingTo?.id
+        val replyTo = replyingTo
+        val replyId = replyTo?.id
         val delaySec = if (delaySeconds > 0) delaySeconds else null
-        inputText = ""
-        replyingTo = null
-        delaySeconds = 0
+        val savedDelay = delaySeconds
+        val savedInput = inputValue
+        val opId = pendingOperationId ?: java.util.UUID.randomUUID().toString().lowercase()
+        pendingOperationId = opId
         scope.launch {
-            runCatching {
+            val result = runCatching {
                 model.postCollabMessage(
                     spaceId = spaceId,
                     content = text,
                     to = targets,
                     inReplyTo = replyId,
                     delaySeconds = delaySec,
+                    operationId = opId,
                 )
             }
             sending = false
-            loadChatState(silent = true)
-            onMutated()
+            if (result.isSuccess) {
+                pendingOperationId = null
+                if (inputValue.text == savedInput.text) {
+                    inputValue = androidx.compose.ui.text.input.TextFieldValue("")
+                    selectedTargets = emptyList()
+                    replyingTo = null
+                    delaySeconds = 0
+                }
+                conv.unreadNewCount = 0
+                conv.syncIncrementalTail(forceScrollToBottom = true)
+                onMutated()
+            } else {
+                // Keep draft, targets, reply and operationId so a retry is idempotent.
+                sendError = "发送失败：" + (result.exceptionOrNull()?.message?.take(120) ?: "网络错误") + "，点击发送重试"
+                if (inputValue.text.isEmpty()) inputValue = savedInput
+                replyingTo = replyTo
+                selectedTargets = targets
+                delaySeconds = savedDelay
+            }
         }
     }
 
@@ -1565,7 +1568,6 @@ private fun CollaborationChatView(
                 Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回", tint = c.textPrimary, modifier = Modifier.size(20.dp))
             }
 
-            // Center Interactive Header (tap plays bot emote!)
             Row(
                 modifier = Modifier
                     .weight(1f)
@@ -1575,17 +1577,8 @@ private fun CollaborationChatView(
                 horizontalArrangement = Arrangement.Center,
             ) {
                 if (item.isGroup) {
-                    val configs = if (agentMembers.isNotEmpty()) {
-                        agentMembers.map { it.botAvatar }
-                    } else {
-                        item.membersPreview.map { it.botAvatar }
-                    }
-                    CollabGroupAvatarView(
-                        avatars = configs,
-                        tagColorHex = item.tagColor,
-                        size = 28.dp,
-                        sessionActive = isChatActive,
-                    )
+                    val configs = if (agentMembers.isNotEmpty()) agentMembers.map { it.botAvatar } else item.membersPreview.map { it.botAvatar }
+                    CollabGroupAvatarView(avatars = configs, tagColorHex = item.tagColor, size = 28.dp, sessionActive = isChatActive)
                 } else {
                     MemberBotAvatarView(
                         config = item.member?.botAvatar ?: CollabBotAvatarConfig.derive(item.displayName),
@@ -1596,34 +1589,15 @@ private fun CollaborationChatView(
                     )
                 }
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = item.displayName,
-                    color = c.textPrimary,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Text(item.displayName, color = c.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (item.isGroup) {
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "(${maxOf(item.memberCount, agentMembers.size)})",
-                        color = c.textSecondary,
-                        fontSize = 12.sp,
-                    )
+                    Text("(${maxOf(item.memberCount, agentMembers.size)})", style = TextStyle(color = c.textSecondary, fontSize = 12.sp, fontFeatureSettings = "tnum"))
                 }
             }
 
-            IconButton(
-                onClick = { showDetailSheet = true },
-                modifier = Modifier.size(34.dp),
-            ) {
-                Icon(
-                    if (item.isGroup) Icons.Outlined.Groups else Icons.Outlined.Tune,
-                    contentDescription = "详情配置",
-                    tint = c.textPrimary,
-                    modifier = Modifier.size(19.dp),
-                )
+            IconButton(onClick = { showDetailSheet = true }, modifier = Modifier.size(34.dp)) {
+                Icon(if (item.isGroup) Icons.Outlined.Groups else Icons.Outlined.Tune, contentDescription = "详情配置", tint = c.textPrimary, modifier = Modifier.size(19.dp))
             }
         }
 
@@ -1632,17 +1606,11 @@ private fun CollaborationChatView(
         // Scheduled Messages Banner
         if (scheduled.isNotEmpty()) {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFFF97316).copy(alpha = 0.08f))
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth().background(Color(0xFFF97316).copy(alpha = 0.08f)).padding(horizontal = 14.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 scheduled.forEach { sched ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Icon(Icons.Outlined.Schedule, contentDescription = null, tint = Color(0xFFF97316), modifier = Modifier.size(14.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(sched.content, color = c.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -1655,10 +1623,8 @@ private fun CollaborationChatView(
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.clickable {
                                 scope.launch {
-                                    runCatching {
-                                        model.execCollabCommand("space.cancelScheduledMessage", mapOf("scheduleId" to sched.id))
-                                    }
-                                    loadChatState(silent = true)
+                                    runCatching { model.execCollabCommand("space.cancelScheduledMessage", mapOf("scheduleId" to sched.id)) }
+                                    conv.syncIncrementalTail()
                                 }
                             },
                         )
@@ -1669,21 +1635,14 @@ private fun CollaborationChatView(
 
         // Message Stream
         Box(modifier = Modifier.weight(1f)) {
-            if (loading && messages.isEmpty()) {
+            if (conv.loading && messages.isEmpty()) {
                 CollaborationChatSkeletonView(modifier = Modifier.fillMaxSize())
             } else if (messages.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Icon(Icons.Outlined.Groups, contentDescription = null, tint = c.textSecondary, modifier = Modifier.size(32.dp))
                         Text("开始对话", color = c.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            text = if (item.isGroup) "输入消息并使用 @ 指定群内助手协作" else "直接发送消息与助手对话",
-                            color = c.textSecondary,
-                            fontSize = 13.sp,
-                        )
+                        Text(if (item.isGroup) "输入消息并使用 @ 指定群内助手协作" else "直接发送消息与助手对话", color = c.textSecondary, fontSize = 13.sp)
                     }
                 }
             } else {
@@ -1693,39 +1652,51 @@ private fun CollaborationChatView(
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
+                    if (conv.hasMoreBefore) {
+                        item(key = "header:load-earlier") {
+                            CollabLoadEarlierBanner(loading = conv.loadingEarlier, onLoadEarlier = conv::loadEarlierMessages)
+                        }
+                    }
+
                     items(messages, key = { it.id }) { msg ->
-                        val repliedMsg = msg.inReplyTo?.let { refId -> messages.firstOrNull { it.id == refId || it.rawId == refId } }
+                        val repliedMsg = lookupCollabReplyMessage(messageLookup, msg.inReplyTo)
+                        val isMsgExpanded = conv.expandedMessageIds[msg.id] == true
                         CollabMessageRow(
                             message = msg,
                             repliedMessage = repliedMsg,
+                            knownCardsById = cardsById,
+                            isExpanded = isMsgExpanded,
                             isGroup = item.isGroup,
                             leadMemberId = spaceSummary?.leadMemberId,
                             avatarConfig = memberAvatarConfig(msg.envelope.sender, msg.envelope.isSystem),
                             agentMembers = agentMembers,
+                            onToggleExpand = { conv.expandedMessageIds[msg.id] = !isMsgExpanded },
+                            onOpenFullReader = { conv.readerMessage = msg },
                             onAvatarTap = {
-                                if (!msg.isFromUser && !msg.envelope.isSystem) {
-                                    openMemberUnderlyingSession(msg.envelope.sender)
-                                }
+                                if (!msg.isFromUser && !msg.envelope.isSystem) openMemberUnderlyingSession(msg.envelope.sender)
                             },
                             onReact = { emoji ->
                                 scope.launch {
                                     runCatching { model.reactCollab(spaceId, msg.id, emoji) }
-                                    loadChatState(silent = true)
+                                    conv.syncIncrementalTail()
                                 }
                             },
                             onReply = { replyingTo = msg },
-                            onCopy = { clipboard.setText(AnnotatedString(msg.envelope.content)) },
+                            onCopy = {
+                                val clean = parseCollabStructuredMessage(msg.envelope.content).cleanText.ifBlank { msg.envelope.content }
+                                clipboard.setText(AnnotatedString(clean))
+                            },
                             onCollect = {
                                 scope.launch {
-                                    val title = msg.envelope.content.take(40).ifBlank { "收藏消息" }
+                                    val clean = parseCollabStructuredMessage(msg.envelope.content).cleanText.ifBlank { msg.envelope.content }
                                     runCatching {
                                         model.execCollabCommand(
                                             "space.addCollectionItem",
                                             mapOf(
                                                 "spaceId" to spaceId,
                                                 "kind" to "message",
-                                                "name" to title,
-                                                "textContent" to msg.envelope.content,
+                                                "name" to clean.take(40).ifBlank { "收藏消息" },
+                                                "textContent" to clean,
                                                 "sourceMessageId" to msg.id,
                                             ),
                                         )
@@ -1734,22 +1705,25 @@ private fun CollaborationChatView(
                             },
                             onDistill = {
                                 scope.launch {
-                                    runCatching {
-                                        model.execCollabCommand(
-                                            "space.memory.distillMessage",
-                                            mapOf("spaceId" to spaceId, "messageId" to msg.id),
-                                        )
-                                    }
+                                    runCatching { model.execCollabCommand("space.memory.distillMessage", mapOf("spaceId" to spaceId, "messageId" to msg.id)) }
                                 }
                             },
                             onStopReceiptTurn = { receiptMemberId ->
                                 scope.launch {
                                     runCatching { model.cancelCollabSpaceTurn(spaceId, receiptMemberId) }
-                                    loadChatState(silent = true)
+                                    conv.syncIncrementalTail()
                                 }
                             },
                         )
                     }
+                }
+
+                if (!conv.isNearBottom && messages.isNotEmpty()) {
+                    CollabJumpToBottomPill(
+                        unreadNewCount = conv.unreadNewCount,
+                        onClick = conv::jumpToBottom,
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(end = 14.dp, bottom = 12.dp),
+                    )
                 }
             }
         }
@@ -1758,122 +1732,67 @@ private fun CollaborationChatView(
         val pendingCards = remember(cards) { cards.filter { it.isPending } }
         if (pendingCards.isNotEmpty()) {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(c.bgElevated)
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth().background(c.bgElevated).padding(horizontal = 14.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 pendingCards.forEach { card ->
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = c.card,
-                        border = BorderStroke(0.5.dp, c.stroke),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                Icon(
-                                    if (card.kind == "approval") Icons.Outlined.Shield else Icons.Outlined.HelpOutline,
-                                    contentDescription = null,
-                                    tint = Color(0xFFF97316),
-                                    modifier = Modifier.size(15.dp),
-                                )
-                                Text(
-                                    text = if (card.kind == "approval") "待审批请求" else "助手提问",
-                                    color = c.textPrimary,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                )
+                    Surface(shape = RoundedCornerShape(12.dp), color = c.card, border = BorderStroke(0.5.dp, c.stroke), modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Icon(if (card.kind == "approval") Icons.Outlined.Shield else Icons.Outlined.HelpOutline, contentDescription = null, tint = Color(0xFFF97316), modifier = Modifier.size(15.dp))
+                                Text(if (card.kind == "approval") "待审批请求" else "助手提问", color = c.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 Spacer(modifier = Modifier.weight(1f))
-                                val actionName = card.action ?: card.command
-                                if (!actionName.isNullOrBlank()) {
-                                    Text(
-                                        text = actionName,
-                                        color = c.textSecondary,
-                                        fontSize = 11.sp,
-                                        fontFamily = FontFamily.Monospace,
-                                    )
+                                (card.action ?: card.command)?.takeIf { it.isNotBlank() }?.let {
+                                    Text(it, color = c.textSecondary, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
                                 }
                             }
-
-                            val promptText = card.question ?: card.reason ?: card.action
-                            if (!promptText.isNullOrBlank()) {
-                                Text(promptText, color = c.textPrimary, fontSize = 13.sp)
+                            (card.question ?: card.reason ?: card.action)?.takeIf { it.isNotBlank() }?.let {
+                                Text(it, color = c.textPrimary, fontSize = 13.sp)
                             }
-
                             if (card.kind == "approval") {
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Button(
                                         onClick = {
                                             scope.launch {
                                                 runCatching { model.resolveCollabPendingCard(card.id, decision = "approved") }
-                                                loadChatState(silent = true)
+                                                conv.syncIncrementalTail()
                                             }
                                         },
                                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF22C55E)),
                                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                                    ) {
-                                        Text("批准", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                    }
+                                    ) { Text("批准", fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
                                     OutlinedButton(
                                         onClick = {
                                             scope.launch {
                                                 runCatching { model.resolveCollabPendingCard(card.id, decision = "denied", declined = true) }
-                                                loadChatState(silent = true)
+                                                conv.syncIncrementalTail()
                                             }
                                         },
                                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                                    ) {
-                                        Text("拒绝", color = c.danger, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                    }
+                                    ) { Text("拒绝", color = c.danger, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
                                 }
                             } else {
                                 if (card.options.isNotEmpty()) {
-                                    Row(
-                                        modifier = Modifier.horizontalScroll(rememberScrollState()),
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    ) {
+                                    Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                         card.options.forEach { opt ->
                                             Surface(
                                                 onClick = {
                                                     scope.launch {
                                                         runCatching { model.resolveCollabPendingCard(card.id, answer = opt) }
-                                                        loadChatState(silent = true)
+                                                        conv.syncIncrementalTail()
                                                     }
                                                 },
                                                 shape = RoundedCornerShape(50),
                                                 color = Color(0xFF2563EB).copy(alpha = 0.12f),
                                             ) {
-                                                Text(
-                                                    text = opt,
-                                                    color = Color(0xFF2563EB),
-                                                    fontSize = 12.sp,
-                                                    fontWeight = FontWeight.Medium,
-                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                                )
+                                                Text(opt, color = Color(0xFF2563EB), fontSize = 12.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
                                             }
                                         }
                                     }
                                 }
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     val draft = questionDrafts[card.id].orEmpty()
-                                    OutlinedTextField(
-                                        value = draft,
-                                        onValueChange = { questionDrafts[card.id] = it },
-                                        placeholder = { Text("输入回答…", fontSize = 12.sp) },
-                                        singleLine = true,
-                                        modifier = Modifier.weight(1f),
-                                    )
+                                    OutlinedTextField(value = draft, onValueChange = { questionDrafts[card.id] = it }, placeholder = { Text("输入回答…", fontSize = 12.sp) }, singleLine = true, modifier = Modifier.weight(1f))
                                     Button(
                                         onClick = {
                                             val ans = draft.trim()
@@ -1881,25 +1800,21 @@ private fun CollaborationChatView(
                                                 questionDrafts.remove(card.id)
                                                 scope.launch {
                                                     runCatching { model.resolveCollabPendingCard(card.id, answer = ans) }
-                                                    loadChatState(silent = true)
+                                                    conv.syncIncrementalTail()
                                                 }
                                             }
                                         },
                                         enabled = draft.trim().isNotEmpty(),
                                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                                    ) {
-                                        Text("发送", fontSize = 12.sp)
-                                    }
+                                    ) { Text("发送", fontSize = 12.sp) }
                                     TextButton(
                                         onClick = {
                                             scope.launch {
                                                 runCatching { model.resolveCollabPendingCard(card.id, declined = true) }
-                                                loadChatState(silent = true)
+                                                conv.syncIncrementalTail()
                                             }
                                         },
-                                    ) {
-                                        Text("跳过", color = c.textSecondary, fontSize = 12.sp)
-                                    }
+                                    ) { Text("跳过", color = c.textSecondary, fontSize = 12.sp) }
                                 }
                             }
                         }
@@ -1917,110 +1832,89 @@ private fun CollaborationChatView(
                 .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // Reply Quote Banner
             if (replyingTo != null) {
                 val rep = replyingTo!!
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(c.bgElevated)
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(c.bgElevated).padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Icon(Icons.AutoMirrored.Outlined.Reply, contentDescription = null, tint = Color(0xFF2563EB), modifier = Modifier.size(14.dp))
-                    Text(
-                        text = "回复 ${rep.envelope.displaySender}：${rep.envelope.content}",
-                        color = c.textSecondary,
-                        fontSize = 12.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Icon(
-                        Icons.Outlined.Close,
-                        contentDescription = "取消回复",
-                        tint = c.textSecondary,
-                        modifier = Modifier
-                            .size(16.dp)
-                            .clickable { replyingTo = null },
-                    )
+                    Text("回复 ${rep.envelope.displaySender}：${collabMessagePreviewText(rep.envelope.content)}", color = c.textSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Icon(Icons.Outlined.Close, contentDescription = "取消回复", tint = c.textSecondary, modifier = Modifier.size(16.dp).clickable { replyingTo = null })
                 }
             }
 
-            // Group @ Mention Selector Bar
             if (item.isGroup && agentMembers.isNotEmpty()) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     val allSelected = selectedTargets.contains("@all")
-                    Surface(
-                        onClick = { toggleTarget("@all") },
-                        shape = RoundedCornerShape(50),
-                        color = if (allSelected) Color(0xFF2563EB) else c.bgElevated,
-                    ) {
-                        Text(
-                            text = "@全体成员",
-                            color = if (allSelected) Color.White else c.textPrimary,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                        )
+                    Surface(onClick = { toggleTarget("@all") }, shape = RoundedCornerShape(50), color = if (allSelected) Color(0xFF2563EB) else c.bgElevated) {
+                        Text("@全体成员", color = if (allSelected) Color.White else c.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
                     }
-
                     agentMembers.forEach { member ->
                         val selected = selectedTargets.contains(member.resolvedIdentityId)
-                        Surface(
-                            onClick = { toggleTarget(member.resolvedIdentityId) },
-                            shape = RoundedCornerShape(50),
-                            color = if (selected) Color(0xFF2563EB) else c.bgElevated,
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                            ) {
-                                MemberBotAvatarView(
-                                    config = member.botAvatar,
-                                    size = 17.dp,
-                                    sessionActive = false,
-                                    isLead = spaceSummary?.leadMemberId == member.resolvedIdentityId,
-                                )
-                                Text(
-                                    text = "@${member.nickname}",
-                                    color = if (selected) Color.White else c.textPrimary,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                )
+                        Surface(onClick = { toggleTarget(member.resolvedIdentityId) }, shape = RoundedCornerShape(50), color = if (selected) Color(0xFF2563EB) else c.bgElevated) {
+                            Row(modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                MemberBotAvatarView(config = member.botAvatar, size = 17.dp, sessionActive = false, isLead = spaceSummary?.leadMemberId == member.resolvedIdentityId)
+                                Text("@${member.nickname}", color = if (selected) Color.White else c.textPrimary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                             }
                         }
                     }
                 }
             }
 
-            // Floating Capsule Input Row
+            val mentionToken = if (item.isGroup && inputValue.selection.collapsed) {
+                dev.vibex.companion.mentionTokenAt(inputValue.text, inputValue.selection.start)
+            } else {
+                null
+            }
+            if (mentionToken != null) {
+                val q = mentionToken.query
+                val showAll = q.isEmpty() || "全体成员".contains(q, ignoreCase = true) || "all".startsWith(q, ignoreCase = true)
+                val matches = agentMembers.filter { it.nickname.contains(q, ignoreCase = true) }
+                fun insertMention(label: String, target: String) {
+                    val (nextText, caret) = dev.vibex.companion.applyMention(inputValue.text, mentionToken, label)
+                    inputValue = androidx.compose.ui.text.input.TextFieldValue(nextText, androidx.compose.ui.text.TextRange(caret))
+                    if (!selectedTargets.contains(target)) toggleTarget(target)
+                }
+                if (showAll || matches.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 220.dp).clip(RoundedCornerShape(16.dp)).background(c.card)
+                            .border(0.75.dp, c.stroke, RoundedCornerShape(16.dp)).verticalScroll(rememberScrollState()).padding(vertical = 4.dp),
+                    ) {
+                        if (showAll) {
+                            Text("@全体成员", color = c.textPrimary, fontSize = 14.sp, modifier = Modifier.fillMaxWidth().clickable { insertMention("全体成员", "@all") }.padding(horizontal = 14.dp, vertical = 10.dp))
+                        }
+                        matches.forEach { member ->
+                            Text("@" + member.nickname, color = c.textPrimary, fontSize = 14.sp, modifier = Modifier.fillMaxWidth().clickable { insertMention(member.nickname, member.resolvedIdentityId) }.padding(horizontal = 14.dp, vertical = 10.dp))
+                        }
+                    }
+                }
+            }
+
+            sendError?.let { err ->
+                Text(err, color = Color(0xFFE5484D), fontSize = 12.sp, modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp))
+            }
+
             val composerShape = RoundedCornerShape(26.dp)
             val canSend = inputText.trim().isNotEmpty() && !sending
+            val showExpandEditorButton = inputText.length > 80 || inputText.contains('\n')
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
+                modifier = Modifier.fillMaxWidth()
                     .shadow(
                         elevation = if (c.isDark) 8.dp else 4.dp,
                         shape = composerShape,
                         ambientColor = Color.Black.copy(alpha = if (c.isDark) 0.22f else 0.05f),
                         spotColor = Color.Black.copy(alpha = if (c.isDark) 0.28f else 0.08f),
                     )
-                    .clip(composerShape)
-                    .background(c.card)
-                    .border(0.75.dp, c.stroke, composerShape)
+                    .clip(composerShape).background(c.card).border(0.75.dp, c.stroke, composerShape)
                     .padding(start = 10.dp, end = 7.dp, top = 6.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.Bottom,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 if (item.isGroup) {
                     Box(modifier = Modifier.padding(bottom = 2.dp)) {
@@ -2029,93 +1923,90 @@ private fun CollaborationChatView(
                             shape = RoundedCornerShape(50),
                             color = if (delaySeconds > 0) Color(0xFFF97316).copy(alpha = 0.14f) else c.textPrimary.copy(alpha = 0.06f),
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp),
-                            ) {
-                                Icon(
-                                    Icons.Outlined.Schedule,
-                                    contentDescription = "定时发送",
-                                    tint = if (delaySeconds > 0) Color(0xFFF97316) else c.textSecondary,
-                                    modifier = Modifier.size(16.dp),
-                                )
+                            Row(modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Icon(Icons.Outlined.Schedule, contentDescription = "定时发送", tint = if (delaySeconds > 0) Color(0xFFF97316) else c.textSecondary, modifier = Modifier.size(16.dp))
                                 if (delaySeconds > 0) {
-                                    Text(
-                                        text = "${delaySeconds}s",
-                                        style = TextStyle(
-                                            color = Color(0xFFF97316),
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            fontFeatureSettings = "tnum",
-                                        ),
-                                    )
+                                    Text("${delaySeconds}s", style = TextStyle(color = Color(0xFFF97316), fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFeatureSettings = "tnum"))
                                 }
                             }
                         }
-                        VibexDropdownMenu(
-                            expanded = showDelayMenu,
-                            onDismissRequest = { showDelayMenu = false },
-                        ) {
-                            listOf(
-                                0 to "立即发送",
-                                30 to "30 秒后",
-                                60 to "1 分钟后",
-                                300 to "5 分钟后",
-                                900 to "15 分钟后",
-                            ).forEach { (sec, label) ->
-                                VibexDropdownMenuItem(
-                                    text = label,
-                                    selected = delaySeconds == sec,
-                                    onClick = {
-                                        delaySeconds = sec
-                                        showDelayMenu = false
-                                    },
-                                )
+                        VibexDropdownMenu(expanded = showDelayMenu, onDismissRequest = { showDelayMenu = false }) {
+                            listOf(0 to "立即发送", 30 to "30 秒后", 60 to "1 分钟后", 300 to "5 分钟后", 900 to "15 分钟后").forEach { (sec, label) ->
+                                VibexDropdownMenuItem(text = label, selected = delaySeconds == sec, onClick = { delaySeconds = sec; showDelayMenu = false })
                             }
                         }
                     }
                 }
 
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 4.dp, vertical = 8.dp),
-                ) {
+                Box(modifier = Modifier.weight(1f).heightIn(max = 132.dp).padding(horizontal = 4.dp, vertical = 8.dp)) {
                     if (inputText.isEmpty()) {
-                        Text(
-                            text = if (item.isGroup) "发送消息到 ${item.displayName}…" else "发送消息给 ${item.displayName}…",
-                            color = c.textTertiary,
-                            fontSize = 15.sp,
-                        )
+                        Text(if (item.isGroup) "发送消息到 ${item.displayName}…" else "发送消息给 ${item.displayName}…", color = c.textTertiary, fontSize = 15.sp)
                     }
                     BasicTextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
+                        value = inputValue,
+                        onValueChange = {
+                            if (it.text != inputValue.text) {
+                                sendError = null
+                                pendingOperationId = null
+                            }
+                            inputValue = it
+                        },
                         textStyle = TextStyle(color = c.textPrimary, fontSize = 15.sp, lineHeight = 20.sp),
                         cursorBrush = SolidColor(c.accent),
-                        maxLines = 5,
+                        maxLines = 6,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
 
+                if (showExpandEditorButton) {
+                    IconButton(onClick = { showExpandedComposer = true }, modifier = Modifier.padding(bottom = 2.dp).size(32.dp)) {
+                        Icon(Icons.Outlined.OpenInFull, contentDescription = "展开编辑", tint = c.textSecondary, modifier = Modifier.size(16.dp))
+                    }
+                }
+
                 Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
+                    modifier = Modifier.size(36.dp).clip(CircleShape)
                         .background(if (canSend) c.textPrimary else c.textPrimary.copy(alpha = if (c.isDark) 0.16f else 0.11f))
                         .clickable(enabled = canSend, onClick = ::sendMessage),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(
-                        Icons.Outlined.ArrowUpward,
-                        contentDescription = "发送",
-                        tint = if (canSend) c.bg else c.textTertiary,
-                        modifier = Modifier.size(18.dp),
-                    )
+                    Icon(Icons.Outlined.ArrowUpward, contentDescription = "发送", tint = if (canSend) c.bg else c.textTertiary, modifier = Modifier.size(18.dp))
                 }
             }
         }
+    }
+
+    conv.readerMessage?.let { targetMsg ->
+        CollabFullMessageReaderSheet(
+            message = targetMsg,
+            avatarConfig = memberAvatarConfig(targetMsg.envelope.sender, targetMsg.envelope.isSystem),
+            knownCardsById = cardsById,
+            onDismiss = { conv.readerMessage = null },
+        )
+    }
+
+    if (showExpandedComposer) {
+        CollabExpandedComposerSheet(
+            title = item.displayName,
+            isGroup = item.isGroup,
+            leadMemberId = spaceSummary?.leadMemberId,
+            agentMembers = agentMembers,
+            selectedTargets = selectedTargets,
+            replyingTo = replyingTo,
+            inputValue = inputValue,
+            sending = sending,
+            onInputChange = {
+                if (it.text != inputValue.text) {
+                    sendError = null
+                    pendingOperationId = null
+                }
+                inputValue = it
+            },
+            onToggleTarget = ::toggleTarget,
+            onClearReply = { replyingTo = null },
+            onSend = ::sendMessage,
+            onDismiss = { showExpandedComposer = false },
+        )
     }
 
     if (showDetailSheet) {
@@ -2128,7 +2019,7 @@ private fun CollaborationChatView(
             directAssistants = directAssistants,
             onDismiss = { showDetailSheet = false },
             onMutated = {
-                loadChatState(silent = true)
+                conv.refreshNow(refreshMembers = item.isGroup)
                 onMutated()
             },
             onOpenConversation = { convId ->
@@ -2148,10 +2039,14 @@ private fun CollaborationChatView(
 private fun CollabMessageRow(
     message: CollabSpaceMessage,
     repliedMessage: CollabSpaceMessage?,
+    knownCardsById: Map<String, CollabCard>,
+    isExpanded: Boolean,
     isGroup: Boolean,
     leadMemberId: String?,
     avatarConfig: CollabBotAvatarConfig,
     agentMembers: List<CollabSpaceMember>,
+    onToggleExpand: () -> Unit,
+    onOpenFullReader: () -> Unit,
     onAvatarTap: () -> Unit,
     onReact: (String) -> Unit,
     onReply: () -> Unit,
@@ -2188,7 +2083,7 @@ private fun CollabMessageRow(
         }
 
         Column(
-            modifier = Modifier.widthIn(max = 290.dp),
+            modifier = Modifier.widthIn(max = if (message.isFromUser) 292.dp else 324.dp),
             horizontalAlignment = if (message.isFromUser) Alignment.End else Alignment.Start,
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -2253,7 +2148,7 @@ private fun CollabMessageRow(
                 ) {
                     Icon(Icons.AutoMirrored.Outlined.Reply, contentDescription = null, tint = c.textSecondary, modifier = Modifier.size(11.dp))
                     Text(
-                        text = "${repliedMessage.envelope.displaySender}：${repliedMessage.envelope.content}",
+                        text = "${repliedMessage.envelope.displaySender}：${collabMessagePreviewText(repliedMessage.envelope.content)}",
                         color = c.textSecondary,
                         fontSize = 11.sp,
                         maxLines = 1,
@@ -2263,25 +2158,24 @@ private fun CollabMessageRow(
             }
 
             // Message Bubble with Context Menu
+            val bubbleBg = if (message.isFromUser) Color(0xFF2563EB) else c.card
             Box {
                 Surface(
                     shape = RoundedCornerShape(16.dp),
-                    color = if (message.isFromUser) Color(0xFF2563EB) else c.card,
+                    color = bubbleBg,
                     border = if (message.isFromUser) null else BorderStroke(0.5.dp, c.stroke),
                     modifier = Modifier.combinedClickable(
                         onClick = {},
                         onLongClick = { showMenu = true },
                     ),
                 ) {
-                    val displayContent = message.envelope.content.ifEmpty {
-                        if (message.streaming) "思考中…" else ""
-                    }
-                    Text(
-                        text = displayContent,
-                        color = if (message.isFromUser) Color.White else c.textPrimary,
-                        fontSize = 14.sp,
-                        lineHeight = 20.sp,
-                        modifier = Modifier.padding(horizontal = 13.dp, vertical = 9.dp),
+                    CollabRichBubbleContent(
+                        message = message,
+                        knownCardsById = knownCardsById,
+                        bubbleBackground = bubbleBg,
+                        isExpanded = isExpanded,
+                        onToggleExpand = onToggleExpand,
+                        onOpenFullReader = onOpenFullReader,
                     )
                 }
 
@@ -2305,6 +2199,14 @@ private fun CollabMessageRow(
                         }
                     }
                     VibexDropdownDivider()
+                    VibexDropdownMenuItem(
+                        text = "全屏阅读",
+                        leadingIcon = Icons.Outlined.OpenInFull,
+                        onClick = {
+                            showMenu = false
+                            onOpenFullReader()
+                        },
+                    )
                     VibexDropdownMenuItem(
                         text = "回复",
                         leadingIcon = Icons.AutoMirrored.Outlined.Reply,
@@ -3770,7 +3672,7 @@ private fun RolesAndTeamsSheet(
     }
 }
 
-private fun formatCollabRelativeTime(iso: String): String {
+internal fun formatCollabRelativeTime(iso: String): String {
     val trimmed = iso.trim()
     if (trimmed.isEmpty()) return ""
     val millis = runCatching { Instant.parse(trimmed).toEpochMilli() }.getOrNull()

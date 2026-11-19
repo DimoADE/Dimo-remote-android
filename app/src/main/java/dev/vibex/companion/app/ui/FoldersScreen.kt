@@ -132,7 +132,7 @@ fun FoldersScreen(state: UiState, model: CompanionModel) {
                 ) {
                     item(key = "device_bar") {
                         ConnectedDeviceBar(
-                            name = host?.name ?: "VibeX Desktop",
+                            name = host?.name ?: "Dimo 桌面端",
                             detail = "已导入 ${allProjects.size} 个项目",
                             statusColor = if (state.connection == ConnectionState.Online) colors.pass else colors.textTertiary,
                         )

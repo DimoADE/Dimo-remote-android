@@ -14,6 +14,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -109,7 +114,7 @@ fun SettingsScreen(
     when (section) {
         null -> SettingsIndex(state, model, onOpen)
         SettingsSection.Profile -> SettingsPage(l("个人资料", "Profile"), onBack) { ProfileSettings(state) }
-        SettingsSection.Account -> SettingsPage(l("VibeX 账号", "VibeX Account"), onBack) { AccountSettings(state, model, onOpen) }
+        SettingsSection.Account -> SettingsPage(l("Dimo 账号", "Dimo Account"), onBack) { AccountSettings(state, model, onOpen) }
         SettingsSection.Connection -> SettingsPage(l("已配对的电脑", "Paired Computers"), onBack) { ConnectionSettings(state, model, onScan, onManualPair) }
         SettingsSection.Extensions -> SettingsPage(l("技能与扩展", "Skills & Extensions"), onBack) { ExtensionsSettings(state, model) }
         SettingsSection.Font -> SettingsPage(l("字体", "Font"), onBack) { FontSettings(state, model) }
@@ -170,7 +175,7 @@ private fun SettingsIndex(
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(
-                                if (state.accountSignedIn && accountUser != null) accountUser.resolvedDisplayName else l("VibeX 账号", "VibeX Account"),
+                                if (state.accountSignedIn && accountUser != null) accountUser.resolvedDisplayName else l("Dimo 账号", "Dimo Account"),
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = colors.textPrimary,
@@ -232,7 +237,7 @@ private fun SettingsIndex(
                         .substringBefore(":")
                         .ifBlank { "127.0.0.1" }
                     if (isCloudActive) {
-                        l("VibeX 云中继 · Beta", "VibeX Cloud Relay · Beta")
+                        l("Dimo 云中继 · Beta", "Dimo Cloud Relay · Beta")
                     } else {
                         "${l("局域网直连", "Direct LAN")} · $hostAddr"
                     }
@@ -596,7 +601,8 @@ private fun LazyListScope.ProfileSettings(state: UiState) {
         val colors = VibexTheme.colors
         var userName by rememberSaveable { mutableStateOf("LTF") }
         var userHandle by rememberSaveable { mutableStateOf("@ltf") }
-        var userRole by rememberSaveable { mutableStateOf("VibeX Creator") }
+        var userRole by rememberSaveable { mutableStateOf("Dimo Creator") }
+        val displayedUserRole = if (userRole == "VibeX Creator") "Dimo Creator" else userRole
         var userBio by rememberSaveable { mutableStateOf("本地优先 AI 协同工作流与多智能体架构") }
         var avatarColorIdx by rememberSaveable { mutableIntStateOf(0) }
         val palette = listOf(
@@ -618,7 +624,7 @@ private fun LazyListScope.ProfileSettings(state: UiState) {
                 ) {
                     BotAvatarBadge(color = palette[avatarColorIdx % palette.size], size = 72.dp)
                     Text(userName, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = colors.textPrimary)
-                    Text("$userHandle · $userRole", fontSize = 13.sp, color = colors.textSecondary)
+                    Text("$userHandle · $displayedUserRole", fontSize = 13.sp, color = colors.textSecondary)
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 6.dp)) {
                         palette.forEachIndexed { idx, swatch ->
                             Box(
@@ -642,7 +648,7 @@ private fun LazyListScope.ProfileSettings(state: UiState) {
                 HorizontalDivider(color = colors.hairline, modifier = Modifier.padding(start = 16.dp))
                 ProfileFieldRow("标识 (Handle)", userHandle) { userHandle = it }
                 HorizontalDivider(color = colors.hairline, modifier = Modifier.padding(start = 16.dp))
-                ProfileFieldRow("头衔 / 角色", userRole) { userRole = it }
+                ProfileFieldRow("头衔 / 角色", displayedUserRole) { userRole = it }
                 HorizontalDivider(color = colors.hairline, modifier = Modifier.padding(start = 16.dp))
                 ProfileFieldRow("个人简介", userBio) { userBio = it }
             }
@@ -834,11 +840,11 @@ private fun LazyListScope.ConnectionSettings(
                             .substringBefore(":")
                             .ifBlank { "127.0.0.1" }
                         val displayName = if (isCloudOrigin) {
-                            "VibeX 桌面端"
-                        } else if (profile.name.startsWith("VibeX (")) {
-                            profile.name
+                            "Dimo 桌面端"
+                        } else if (profile.name.startsWith("VibeX (") || profile.name.startsWith("Dimo (")) {
+                            profile.name.replaceFirst("VibeX (", "Dimo (")
                         } else {
-                            "VibeX ($hostAddr)"
+                            "Dimo ($hostAddr)"
                         }
                         Row(
                             Modifier
@@ -1422,7 +1428,7 @@ private fun LazyListScope.AboutSettings(state: UiState) {
                     color = colors.textSecondary,
                 )
                 Text(
-                    "VibeX 桌面端伴侣客户端",
+                    "Dimo 桌面端伴侣客户端",
                     fontSize = 12.5.sp,
                     color = colors.textTertiary,
                     textAlign = TextAlign.Center,
@@ -1546,25 +1552,23 @@ private fun LazyListScope.AccountSettings(
                                 )
                             }
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Text(
-                                        user.resolvedDisplayName,
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = colors.textPrimary,
-                                    )
-                                    val isActive = overview.hasActiveCreditsOrTier
-                                    Text(
-                                        if (isActive) "已激活" else "免费版",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = if (isActive) colors.accent else colors.textSecondary,
-                                        modifier = Modifier
-                                            .clip(CircleShape)
-                                            .background(if (isActive) colors.accent.copy(alpha = 0.14f) else colors.segmentedTrack)
-                                            .padding(horizontal = 7.dp, vertical = 2.dp),
-                                    )
-                                }
+                                Text(
+                                    user.resolvedDisplayName,
+                                    fontSize = AccountTokens.title,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colors.textPrimary,
+                                )
+                                val isActive = overview.hasActiveCreditsOrTier
+                                Text(
+                                    overview.planDisplayName,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (isActive) colors.accent else colors.textSecondary,
+                                    modifier = Modifier
+                                        .clip(CircleShape)
+                                        .background(if (isActive) colors.accent.copy(alpha = 0.14f) else colors.segmentedTrack)
+                                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                                )
                                 if (user.email.isNotBlank()) {
                                     Text(user.email, fontSize = 12.5.sp, color = colors.textSecondary)
                                 }
@@ -1577,8 +1581,18 @@ private fun LazyListScope.AccountSettings(
                                     )
                                 }
                             }
-                            TextButton(onClick = { model.refreshAccount() }) {
-                                Text("刷新", fontSize = 12.5.sp, color = colors.accent)
+                            Column(horizontalAlignment = Alignment.End) {
+                                AccountPrimaryButton(
+                                    text = l("升级", "Upgrade"),
+                                    description = l("升级或充值", "Upgrade or top up"),
+                                    onClick = { model.openAccountSitePath("/account/plan") },
+                                )
+                                TextButton(
+                                    onClick = { model.refreshAccount() },
+                                    modifier = Modifier.heightIn(min = AccountTokens.minTouch),
+                                ) {
+                                    Text(l("刷新", "Refresh"), fontSize = AccountTokens.caption, color = colors.accent, maxLines = 1, softWrap = false)
+                                }
                             }
                         }
                     }
@@ -1590,7 +1604,7 @@ private fun LazyListScope.AccountSettings(
                         ) {
                             ColoredIconBadge(Icons.Rounded.Verified, Color(0xFF007AFF))
                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                Text("登录 VibeX 账号", fontSize = 15.5.sp, fontWeight = FontWeight.Bold, color = colors.textPrimary)
+                                Text(l("登录 Dimo 账号", "Sign in to Dimo"), fontSize = 15.5.sp, fontWeight = FontWeight.Bold, color = colors.textPrimary)
                                 Text(
                                     "跨设备自动同步已配对电脑、查看订阅计划与模型路由额度",
                                     fontSize = 12.sp,
@@ -1628,171 +1642,197 @@ private fun LazyListScope.AccountSettings(
         }
     }
 
-    // 2. Subscription & Credits Usage
+    // 2. Balance card
     if (state.accountSignedIn && overview != null) {
-        item { GroupLabel("订阅与额度") }
+        item { GroupLabel(l("订阅与额度", "Plan & credits")) }
         item {
             val colors = VibexTheme.colors
-            IosSettingsCard {
+            val empty = overview.balanceMicro <= 0L && overview.activeTotalMicro <= 0L
+            AccountCard {
                 Column(
-                    Modifier.fillMaxWidth().padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    Modifier.fillMaxWidth().padding(AccountTokens.cardPadding),
+                    verticalArrangement = Arrangement.spacedBy(AccountTokens.gap),
                 ) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                overview.planDisplayName,
-                                fontSize = 15.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = colors.textPrimary,
-                            )
-                            val activeCount = overview.activeGrants.size
-                            Text(
-                                if (activeCount > 0) "${activeCount} 个额度包生效中" else "支持 Claude / OpenAI / Gemini 等多模型路由与云中继",
-                                fontSize = 12.sp,
-                                color = colors.textSecondary,
-                            )
-                        }
+                    Text(overview.planDisplayName, fontSize = AccountTokens.title, fontWeight = FontWeight.Bold, color = colors.textPrimary)
+                    Text(
+                        l("支持 Claude / OpenAI / Gemini 等多模型路由与云中继", "Multi-model routing (Claude / OpenAI / Gemini) and cloud relay"),
+                        fontSize = AccountTokens.caption,
+                        color = colors.textSecondary,
+                    )
+                    HorizontalDivider(color = colors.hairline)
+                    Text(l("可用模型路由余额", "Available routing balance"), fontSize = AccountTokens.caption, color = colors.textSecondary)
+                    Text(
+                        "$${VibeXAccountRepository.formatCredits(overview.balanceMicro)}",
+                        fontSize = AccountTokens.display,
+                        fontFamily = PlexMono,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.textPrimary,
+                    )
+                    if (overview.activeTotalMicro > 0L) {
                         Text(
-                            "充值 / 订阅",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = colors.accent,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(colors.accent.copy(alpha = 0.12f))
-                                .clickable { model.openAccountSitePath("/account/plan") }
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            l(
+                                "总额度 $${VibeXAccountRepository.formatCredits(overview.activeTotalMicro)} · 剩余 ${(overview.remainingRatio * 100).toInt()}% · ${overview.activeGrants.size} 个额度包生效中",
+                                "Total $${VibeXAccountRepository.formatCredits(overview.activeTotalMicro)} · ${(overview.remainingRatio * 100).toInt()}% left · ${overview.activeGrants.size} active packs",
+                            ),
+                            fontSize = AccountTokens.caption,
+                            color = colors.textSecondary,
+                        )
+                    } else if (empty) {
+                        Text(
+                            l("余额为 0。充值或订阅后即可使用云端多模型路由与云中继。", "Balance is 0. Top up or subscribe to use cloud model routing and relay."),
+                            fontSize = AccountTokens.caption,
+                            color = colors.textSecondary,
                         )
                     }
-                    HorizontalDivider(color = colors.hairline)
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.Bottom,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text("可用模型路由余额", fontSize = 12.sp, color = colors.textSecondary)
-                            Text(
-                                "$${VibeXAccountRepository.formatCredits(overview.balanceMicro)}",
-                                fontSize = 22.sp,
-                                fontFamily = PlexMono,
-                                fontWeight = FontWeight.Bold,
-                                color = colors.textPrimary,
-                            )
-                        }
-                        if (overview.activeTotalMicro > 0L) {
-                            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(
-                                    "总额度 $${VibeXAccountRepository.formatCredits(overview.activeTotalMicro)}",
-                                    fontSize = 11.5.sp,
-                                    fontFamily = PlexMono,
-                                    color = colors.textTertiary,
-                                )
-                                Text(
-                                    "剩余 ${(overview.remainingRatio * 100).toInt()}%",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = colors.accent,
-                                )
-                            }
-                        }
-                    }
+                    AccountPrimaryButton(
+                        text = l("去充值", "Top up"),
+                        description = l("打开充值与订阅页面", "Open top-up and plans page"),
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { model.openAccountSitePath("/account/plan") },
+                    )
                 }
             }
         }
 
-        // 3. 30-Day Usage
-        item { GroupLabel("近 30 天模型路由用量") }
+        // 3. Usage card with mini bar chart
+        item { GroupLabel(l("模型路由用量", "Routing usage")) }
         item {
             val colors = VibexTheme.colors
             val rows = overview.usage30d.byModel
             val spent30d = rows.sumOf { it.costMicro }
             val reqs30d = rows.sumOf { it.requests }
             val tokens30d = rows.sumOf { it.tokens }
-            IosSettingsCard {
+            AccountCard {
                 Column(
-                    Modifier.fillMaxWidth().padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    Modifier.fillMaxWidth().padding(AccountTokens.cardPadding),
+                    verticalArrangement = Arrangement.spacedBy(AccountTokens.gap),
                 ) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        AccountMetricChip(Modifier.weight(1f), "30天消耗", "$${VibeXAccountRepository.formatCredits(spent30d)}")
-                        AccountMetricChip(Modifier.weight(1f), "请求次数", reqs30d.toString())
-                        AccountMetricChip(Modifier.weight(1f), "总 Token", VibeXAccountRepository.formatCompact(tokens30d))
-                    }
-                    if (rows.isNotEmpty()) {
-                        HorizontalDivider(color = colors.hairline)
-                        rows.take(6).forEach { row ->
+                    if (rows.isEmpty()) {
+                        Text(
+                            l("近 30 天暂无模型路由调用记录", "No routing calls in the last 30 days"),
+                            fontSize = AccountTokens.caption,
+                            color = colors.textSecondary,
+                        )
+                    } else {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(AccountTokens.gapSmall)) {
+                            AccountMetricChip(Modifier.weight(1f), l("30天消耗", "30d spend"), "$${VibeXAccountRepository.formatCredits(spent30d)}")
+                            AccountMetricChip(Modifier.weight(1f), l("请求次数", "Requests"), reqs30d.toString())
+                            AccountMetricChip(Modifier.weight(1f), l("总 Token", "Tokens"), VibeXAccountRepository.formatCompact(tokens30d))
+                        }
+                        val top = rows.sortedByDescending { it.costMicro }.take(6)
+                        val maxCost = top.maxOf { it.costMicro }.coerceAtLeast(1L)
+                        val summary = top.joinToString("；") {
+                            (overview.usage30d.modelNames[it.modelId] ?: it.modelId) + " " + "$" + VibeXAccountRepository.formatCredits(it.costMicro)
+                        }
+                        Text(l("近 30 天各模型消耗占比", "30-day spend by model"), fontSize = AccountTokens.caption, color = colors.textSecondary)
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(64.dp)
+                                .semantics { contentDescription = summary },
+                            horizontalArrangement = Arrangement.spacedBy(AccountTokens.gapSmall),
+                            verticalAlignment = Alignment.Bottom,
+                        ) {
+                            top.forEach { row ->
+                                val frac = (row.costMicro.toFloat() / maxCost.toFloat()).coerceIn(0.06f, 1f)
+                                Box(
+                                    Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight(frac)
+                                        .clip(RoundedCornerShape(AccountTokens.radiusSmall))
+                                        .background(colors.accent),
+                                )
+                            }
+                        }
+                        top.forEach { row ->
                             val modelLabel = overview.usage30d.modelNames[row.modelId] ?: row.modelId
                             Row(
                                 Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.Top,
+                                horizontalArrangement = Arrangement.spacedBy(AccountTokens.gapSmall),
                             ) {
                                 Text(
                                     modelLabel,
-                                    fontSize = 12.5.sp,
+                                    fontSize = AccountTokens.body,
                                     fontWeight = FontWeight.Medium,
                                     color = colors.textPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f),
                                 )
                                 Text(
-                                    "${row.requests} 次 · $${VibeXAccountRepository.formatCredits(row.costMicro)}",
-                                    fontSize = 12.sp,
+                                    "${row.requests} " + l("次", "req") + " · $" + VibeXAccountRepository.formatCredits(row.costMicro),
+                                    fontSize = AccountTokens.caption,
                                     fontFamily = PlexMono,
                                     color = colors.textSecondary,
                                 )
                             }
                         }
-                    } else {
-                        Text("近 30 天暂无模型路由调用记录", fontSize = 12.sp, color = colors.textTertiary)
                     }
                 }
             }
         }
     }
 
-    // 4. Cloud Synced Hosts (Summary + Sync Trigger, full management in ConnectionSettings)
+    // 4. Device sync card
     if (state.accountSignedIn) {
-        item { GroupLabel("电脑跨端云同步") }
+        item { GroupLabel(l("电脑跨端云同步", "Desktop sync")) }
         item {
             val colors = VibexTheme.colors
             val syncedCount = maxOf(state.accountDesktops.size, state.accountSavedHosts.size)
-            IosSettingsCard {
-                Column(Modifier.fillMaxWidth()) {
-                    IosSettingsRow(
-                        icon = Icons.Rounded.Computer,
-                        tint = Color(0xFF007AFF),
-                        title = "管理已配对与云端同步的电脑",
-                        subtitle = if (syncedCount > 0) {
-                            "账号下已关联 $syncedCount 台电脑，支持局域网与云服务自动切换"
-                        } else {
-                            "在桌面端登录同一账号或扫码配对后自动跨设备同步"
-                        },
-                        onClick = { onOpen(SettingsSection.Connection) },
-                    )
-                    HorizontalDivider(color = colors.hairline)
+            val online = state.connection == ConnectionState.Online
+            val origin = state.activeOrigin.orEmpty().lowercase()
+            val isLan = origin.contains("://192.168.") || origin.contains("://10.") ||
+                Regex("://172\\.(1[6-9]|2\\d|3[01])\\.").containsMatchIn(origin) ||
+                origin.contains(".local") || origin.contains("://localhost") || origin.contains("://127.")
+            val route = when {
+                !online -> l("离线", "Offline")
+                isLan -> l("在线 · 局域网", "Online · LAN")
+                else -> l("在线 · 云中继", "Online · Cloud relay")
+            }
+            val lastSync = state.profiles.mapNotNull { it.lastSyncAt }.maxOrNull()
+            val lastSyncText = if (lastSync != null) {
+                l("最近同步 ", "Last sync ") + java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(lastSync))
+            } else {
+                l("尚未同步", "Not synced yet")
+            }
+            AccountCard {
+                Column(
+                    Modifier.fillMaxWidth().padding(AccountTokens.cardPadding),
+                    verticalArrangement = Arrangement.spacedBy(AccountTokens.gap),
+                ) {
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .clickable(enabled = !state.accountSyncingHosts) { model.syncAccountHosts(forcePush = true) }
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                            .heightIn(min = AccountTokens.minTouch)
+                            .clickable(onClickLabel = l("管理已配对电脑", "Manage paired computers")) { onOpen(SettingsSection.Connection) },
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center,
+                        horizontalArrangement = Arrangement.spacedBy(AccountTokens.gap),
                     ) {
-                        Text(
-                            if (state.accountSyncingHosts) "正在同步已配对电脑…" else "立即同步账号下的电脑",
-                            fontSize = 13.5.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = colors.accent,
-                        )
+                        ColoredIconBadge(Icons.Rounded.Computer, if (online) colors.accent else colors.textTertiary)
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                if (syncedCount > 0) l("已关联 $syncedCount 台电脑", "$syncedCount computer(s) linked") else l("尚未关联电脑", "No computers linked"),
+                                fontSize = AccountTokens.title,
+                                fontWeight = FontWeight.SemiBold,
+                                color = colors.textPrimary,
+                            )
+                            Text(route + " · " + lastSyncText, fontSize = AccountTokens.caption, color = colors.textSecondary)
+                            if (syncedCount == 0) {
+                                Text(
+                                    l("在桌面端登录同一账号或扫码配对后自动同步", "Sign in on desktop or scan to pair; sync is automatic"),
+                                    fontSize = AccountTokens.caption,
+                                    color = colors.textSecondary,
+                                )
+                            }
+                        }
+                        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = colors.textTertiary, modifier = Modifier.size(18.dp))
                     }
+                    AccountSecondaryButton(
+                        text = if (state.accountSyncingHosts) l("正在同步…", "Syncing…") else l("立即同步", "Sync now"),
+                        description = l("立即同步账号下的电脑", "Sync computers on this account now"),
+                        enabled = !state.accountSyncingHosts,
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { model.syncAccountHosts(forcePush = true) },
+                    )
                 }
             }
         }
@@ -1848,7 +1888,7 @@ private fun LazyListScope.AccountSettings(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        if (state.accountSigningOut) "正在退出…" else "退出 VibeX 账号",
+                        if (state.accountSigningOut) "正在退出…" else l("退出 Dimo 账号", "Sign out of Dimo"),
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = colors.danger,
@@ -1883,4 +1923,54 @@ private fun GroupLabel(text: String) {
         color = VibexTheme.colors.textSecondary,
         modifier = Modifier.padding(start = 6.dp, top = 4.dp),
     )
+}
+
+private object AccountTokens {
+    val radius = 16.dp
+    val radiusSmall = 8.dp
+    val cardPadding = 16.dp
+    val gap = 12.dp
+    val gapSmall = 8.dp
+    val minTouch = 48.dp
+    val display = 28.sp
+    val title = 16.sp
+    val body = 14.sp
+    val caption = 12.5.sp
+}
+
+@Composable
+private fun AccountCard(content: @Composable () -> Unit) = IosSettingsCard(content)
+
+@Composable
+private fun AccountPrimaryButton(text: String, description: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val colors = VibexTheme.colors
+    Box(
+        modifier
+            .heightIn(min = AccountTokens.minTouch)
+            .clip(RoundedCornerShape(AccountTokens.radius - 4.dp))
+            .background(colors.accent)
+            .clickable(role = Role.Button, onClickLabel = description, onClick = onClick)
+            .padding(horizontal = AccountTokens.cardPadding, vertical = 10.dp)
+            .semantics { contentDescription = description },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, fontSize = AccountTokens.body, fontWeight = FontWeight.SemiBold, color = Color.White, maxLines = 1, softWrap = false)
+    }
+}
+
+@Composable
+private fun AccountSecondaryButton(text: String, description: String, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val colors = VibexTheme.colors
+    Box(
+        modifier
+            .heightIn(min = AccountTokens.minTouch)
+            .clip(RoundedCornerShape(AccountTokens.radius - 4.dp))
+            .background(colors.accent.copy(alpha = if (enabled) 0.12f else 0.06f))
+            .clickable(enabled = enabled, role = Role.Button, onClickLabel = description, onClick = onClick)
+            .padding(horizontal = AccountTokens.cardPadding, vertical = 10.dp)
+            .semantics { contentDescription = description },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, fontSize = AccountTokens.body, fontWeight = FontWeight.SemiBold, color = colors.accent, maxLines = 1, softWrap = false)
+    }
 }
